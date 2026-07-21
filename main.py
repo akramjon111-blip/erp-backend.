@@ -185,6 +185,12 @@ async def update_fcm_token(
 
 @app.post("/api/orders", response_model=OrderResponseSchema)
 async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends(get_db)):
+    # 1. Проверяем, нет ли уже заказа с таким ID
+    result = await db.execute(select(OrderModel).filter_by(id=order_data.id))
+    if result.scalars().first():
+        raise HTTPException(status_code=400, detail="Заказ с таким ID уже существует")
+
+    # 2. Создаем заказ
     new_order = OrderModel(
         id=order_data.id,
         requesting_dept_id=order_data.requesting_dept_id,
@@ -193,9 +199,13 @@ async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends
     for item in order_data.items:
         new_order.items.append(OrderItemModel(**item.model_dump()))
     
+    # 3. Сохраняем в базу
     db.add(new_order)
     await db.commit()
-    await db.refresh(new_order)
+    
+    # 4. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: принудительно подгружаем позиции заказа (items)
+    await db.refresh(new_order, attribute_names=['items'])
+    
     return new_order
 
 @app.get("/api/orders", response_model=List[OrderResponseSchema])
