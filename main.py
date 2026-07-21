@@ -4,6 +4,13 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 import jwt
+from fastapi import Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+templates = Jinja2Templates(directory="templates")
+@app.get("/app", response_class=HTMLResponse)
+async def web_app(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
