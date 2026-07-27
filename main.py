@@ -127,7 +127,10 @@ class OrderResponseSchema(BaseModel):
 
 # --- ИНИЦИАЛИЗАЦИЯ И ЗАВИСИМОСТИ ---
 app = FastAPI(title="ERP Order Management API")
-
+templates = Jinja2Templates(directory="templates")
+@app.get("/app", response_class=HTMLResponse)
+async def web_app(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 # Настройка CORS для работы в онлайне
 app.add_middleware(
     CORSMiddleware,
