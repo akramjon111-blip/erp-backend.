@@ -22,6 +22,54 @@
     <button class="absolute bottom-6 right-6 bg-blue-600 text-white w-14 h-14 rounded-full shadow-lg flex items-center justify-center text-3xl hover:bg-blue-700 transition hidden" id="fabAdd">
         +
     </button>
+try {
+        // Идем на бэкенд за заказами
+        const response = await fetch('/api/orders');
+        
+        // Если сервер просит пароль (ошибка 401)
+        if (response.status === 401 || response.status === 403) {
+            main.innerHTML = `
+                &lt;div class="flex flex-col items-center justify-center h-full"&gt;
+                    &lt;p class="text-gray-500 mb-4"&gt;Для просмотра заказов нужно войти в систему&lt;/p&gt;
+                    &lt;button class="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium shadow-md hover:bg-blue-700"&gt;Войти&lt;/button&gt;
+                &lt;/div&gt;
+            `;
+            return;
+        }
+        
+        if (!response.ok) throw new Error('Ошибка сети');
+        
+        const orders = await response.json();
+        
+        // Если заказов нет
+        if (!orders || orders.length === 0) {
+            main.innerHTML = '&lt;div class="flex items-center justify-center h-full"&gt;&lt;p class="text-gray-500"&gt;У вас пока нет заказов&lt;/p&gt;&lt;/div&gt;';
+            return;
+        }
+        
+        // Рисуем карточки заказов
+        let html = '&lt;div class="space-y-4"&gt;';
+        orders.forEach(order =&gt; {
+            html += `
+                &lt;div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100"&gt;
+                    &lt;div class="flex justify-between items-start mb-2"&gt;
+                        &lt;h3 class="font-bold text-gray-800"&gt;Заказ #${order.id || '?'}&lt;/h3&gt;
+                        &lt;span class="text-xs font-bold px-2 py-1 rounded-full bg-blue-100 text-blue-700"&gt;${order.status || 'Новый'}&lt;/span&gt;
+                    &lt;/div&gt;
+                    &lt;p class="text-sm text-gray-600"&gt;${order.description || 'Нет описания'}&lt;/p&gt;
+                &lt;/div&gt;
+            `;
+        });
+        html += '&lt;/div&gt;';
+        
+        main.innerHTML = html;
+        
+    } catch (error) {
+        main.innerHTML = '&lt;div class="flex items-center justify-center h-full"&gt;&lt;p class="text-red-500"&gt;Ошибка подключения к серверу&lt;/p&gt;&lt;/div&gt;';
+    }
+}
 
+// Запускаем скрипт сразу после загрузки страницы
+loadApp();
 </body>
 </html>
