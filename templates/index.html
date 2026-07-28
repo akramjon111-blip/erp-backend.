@@ -22,7 +22,7 @@
     <button class="absolute bottom-6 right-6 bg-blue-600 text-white w-14 h-14 rounded-full shadow-lg flex items-center justify-center text-3xl hover:bg-blue-700 transition hidden" id="fabAdd">
         +
     </button>
-try {
+ {
         // Идем на бэкенд за заказами
         const response = await fetch('/api/orders');
         
@@ -68,8 +68,5 @@ try {
         main.innerHTML = '&lt;div class="flex items-center justify-center h-full"&gt;&lt;p class="text-red-500"&gt;Ошибка подключения к серверу&lt;/p&gt;&lt;/div&gt;';
     }
 }
-
-// Запускаем скрипт сразу после загрузки страницы
-loadApp();
 </body>
 </html>
