@@ -32,14 +32,13 @@ class OrderModel(Base):
     __tablename__ = "orders"
     id = Column(String, primary_key=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    approved_at = Column(DateTime, nullable=True) # НОВОЕ ПОЛЕ: Дата утверждения
+    approved_at = Column(DateTime, nullable=True) 
     status = Column(String, default="Черновик")
     enterprise = Column(String, nullable=True)
     requesting_dept_id = Column(String)
     executing_dept_id = Column(String)
     priority = Column(String, default="Средний")
-    planned_date = Column(String, nullable=True) # В UI теперь "Необходимая дата"
-    tech_spec_file = Column(String, nullable=True)
+    planned_date = Column(String, nullable=True) 
     comment = Column(String, nullable=True)
     responsible_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
@@ -68,6 +67,7 @@ class OrderItemModel(Base):
     manufacturer = Column(String, nullable=True)
     supplier = Column(String, nullable=True)
     specification = Column(String, nullable=True) 
+    tech_spec_file = Column(String, nullable=True) # ТЗ теперь принадлежит позиции!
     comment = Column(String, nullable=True)
     order = relationship("OrderModel", back_populates="items")
 
@@ -85,6 +85,7 @@ class OrderItemBase(BaseModel):
     manufacturer: Optional[str] = "-"
     supplier: Optional[str] = "-"
     specification: Optional[str] = "-" 
+    tech_spec_file: Optional[str] = "-" # ТЗ в схеме позиции
     comment: Optional[str] = None
 
 class OrderCreateSchema(BaseModel):
@@ -94,7 +95,6 @@ class OrderCreateSchema(BaseModel):
     executing_dept_id: str
     priority: Optional[str] = "Средний"
     planned_date: Optional[str] = "Не указана"
-    tech_spec_file: Optional[str] = "-"
     comment: Optional[str] = None
     items: List[OrderItemBase]
 
@@ -195,17 +195,9 @@ HTML_CONTENT = """
                         <input type="date" id="plannedDate" class="w-full border border-gray-300 rounded-lg p-2 text-sm">
                     </div>
                     <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание (ТЗ)</label>
-                        <div id="currentFileBox" class="hidden mb-2 bg-blue-50 text-blue-700 text-xs px-2 py-1.5 rounded flex justify-between items-center border border-blue-100">
-                            <span id="currentFileName" class="truncate max-w-[120px] font-medium">Файл.docx</span>
-                            <button type="button" onclick="removeCurrentFile()" class="text-red-500 hover:text-red-700 font-bold ml-2" title="Удалить прикрепленный файл">✕ Удалить</button>
-                        </div>
-                        <input type="file" id="techSpecFile" class="w-full border border-gray-200 rounded-lg p-1 text-xs bg-white text-gray-500">
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Общий комментарий</label>
+                        <textarea id="orderComment" rows="1" class="w-full border border-gray-300 rounded-lg p-2 text-sm resize-y" placeholder="Примечания..."></textarea>
                     </div>
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Общий комментарий</label>
-                    <textarea id="orderComment" rows="2" class="w-full border border-gray-300 rounded-lg p-2 text-sm resize-y" placeholder="Примечания (можно с новой строки)..."></textarea>
                 </div>
                 
                 <hr class="my-3 border-gray-200">
@@ -244,7 +236,6 @@ HTML_CONTENT = """
     <script>
         let ordersCache = [];
         let editingOrderId = null;
-        let existingFileName = null;
 
         const modal = document.getElementById('orderModal');
         const fabAdd = document.getElementById('fabAdd');
@@ -254,9 +245,20 @@ HTML_CONTENT = """
 
         function addItemRow(itemData = null) {
             const row = document.createElement('div');
-            row.className = 'item-row bg-gray-50 p-3 rounded-lg border border-gray-200 relative';
+            row.className = 'item-row bg-gray-50 p-3 rounded-lg border border-gray-200 relative shadow-sm';
             
             const removeBtn = `<button type="button" onclick="this.closest('.item-row').remove()" class="absolute top-2 right-2 text-red-500 hover:text-red-700 text-xs font-bold bg-white px-2 py-0.5 rounded border border-red-200 shadow-sm">✕ Удалить</button>`;
+
+            const existingFile = itemData && itemData.tech_spec_file && itemData.tech_spec_file !== '-' && itemData.tech_spec_file !== 'Не прикреплен' ? itemData.tech_spec_file : null;
+            let fileBoxHtml = '';
+            if (existingFile) {
+                fileBoxHtml = `
+                    <div class="current-file-box mb-1 bg-blue-50 text-blue-700 text-xs px-2 py-1 rounded flex justify-between items-center border border-blue-100 w-full">
+                        <span class="truncate font-medium current-file-name" data-filename="${existingFile}">${existingFile}</span>
+                        <button type="button" onclick="this.closest('.current-file-box').remove()" class="text-red-500 hover:text-red-700 font-bold ml-2">✕ Удалить</button>
+                    </div>
+                `;
+            }
 
             row.innerHTML = `
                 ${removeBtn}
@@ -301,16 +303,19 @@ HTML_CONTENT = """
                         <input type="text" class="i-supp w-full border border-gray-300 rounded p-1.5 text-xs bg-white" placeholder="ООО..." value="${itemData ? (itemData.supplier || '') : ''}">
                     </div>
                 </div>
+                <div class="mt-2 pt-2 border-t border-gray-200">
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание (ТЗ) для этой позиции</label>
+                    ${fileBoxHtml}
+                    <input type="file" class="i-file w-full border border-gray-200 rounded p-1 text-xs bg-white text-gray-500">
+                </div>
             `;
             itemsContainer.appendChild(row);
         }
 
         fabAdd.addEventListener('click', () => {
             editingOrderId = null;
-            existingFileName = null;
             document.getElementById('orderModalTitle').innerText = 'Создание нового заказа';
             document.getElementById('submitBtn').innerText = 'Создать заказ';
-            document.getElementById('currentFileBox').classList.add('hidden');
             orderForm.reset();
             
             itemsContainer.innerHTML = '';
@@ -326,11 +331,6 @@ HTML_CONTENT = """
 
         function closeDetailModal() {
             document.getElementById('detailModal').classList.add('hidden');
-        }
-
-        function removeCurrentFile() {
-            existingFileName = 'Не прикреплен';
-            document.getElementById('currentFileBox').classList.add('hidden');
         }
 
         function openEditForm(orderId) {
@@ -349,14 +349,6 @@ HTML_CONTENT = """
             document.getElementById('plannedDate').value = order.planned_date || '';
             document.getElementById('orderComment').value = order.comment || '';
 
-            existingFileName = order.tech_spec_file;
-            if (existingFileName && existingFileName !== '-' && existingFileName !== 'Не прикреплен') {
-                document.getElementById('currentFileName').innerText = existingFileName;
-                document.getElementById('currentFileBox').classList.remove('hidden');
-            } else {
-                document.getElementById('currentFileBox').classList.add('hidden');
-            }
-
             itemsContainer.innerHTML = '';
             if (order.items && order.items.length > 0) {
                 order.items.forEach(item => addItemRow(item));
@@ -372,6 +364,16 @@ HTML_CONTENT = """
             
             const itemsList = [];
             document.querySelectorAll('.item-row').forEach(row => {
+                const fileInput = row.querySelector('.i-file');
+                const currentFileBox = row.querySelector('.current-file-name');
+                let finalFileName = 'Не прикреплен';
+                
+                if (fileInput.files.length > 0) {
+                    finalFileName = fileInput.files[0].name;
+                } else if (currentFileBox) {
+                    finalFileName = currentFileBox.getAttribute('data-filename');
+                }
+
                 itemsList.push({
                     material_code: row.querySelector('.i-code').value.trim() || '-',
                     name: row.querySelector('.i-name').value.trim(),
@@ -381,21 +383,14 @@ HTML_CONTENT = """
                     allow_analog: row.querySelector('.i-analog').value === 'true',
                     manufacturer: row.querySelector('.i-manuf').value.trim() || '-',
                     supplier: row.querySelector('.i-supp').value.trim() || '-',
-                    specification: row.querySelector('.i-spec').value.trim() || '-'
+                    specification: row.querySelector('.i-spec').value.trim() || '-',
+                    tech_spec_file: finalFileName
                 });
             });
 
             if (itemsList.length === 0) {
                 alert("Ошибка: в заказе должна быть хотя бы одна позиция!");
                 return;
-            }
-
-            const fileInput = document.getElementById('techSpecFile');
-            let finalFileName = 'Не прикреплен';
-            if (fileInput.files.length > 0) {
-                finalFileName = fileInput.files[0].name;
-            } else if (existingFileName && existingFileName !== '-' && existingFileName !== 'Не прикреплен') {
-                finalFileName = existingFileName;
             }
 
             const orderData = {
@@ -405,7 +400,6 @@ HTML_CONTENT = """
                 executing_dept_id: document.getElementById('execDept').value,
                 priority: document.getElementById('priority').value,
                 planned_date: document.getElementById('plannedDate').value || 'Не указана',
-                tech_spec_file: finalFileName,
                 comment: document.getElementById('orderComment').value || '',
                 items: itemsList
             };
@@ -595,10 +589,13 @@ HTML_CONTENT = """
                         order.items.forEach((item, index) => {
                             let analogText = item.allow_analog ? 'Аналог: Да' : 'Аналог: Нет';
                             
+                            let tzText = item.tech_spec_file && item.tech_spec_file !== '-' && item.tech_spec_file !== 'Не прикреплен' 
+                                ? `<span class="ml-2 text-xs text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">📎 ТЗ: ${item.tech_spec_file}</span>` : '';
+
                             itemsHtml += `
                                 <div class="bg-gray-50 p-2.5 rounded-lg text-sm border-l-4 border-blue-400">
                                     <div class="flex justify-between font-medium text-gray-900">
-                                        <span>${index + 1}. ${item.name} <span class="text-xs text-gray-500 font-normal">(${item.material_code})</span></span>
+                                        <span>${index + 1}. ${item.name} <span class="text-xs text-gray-500 font-normal">(${item.material_code})</span>${tzText}</span>
                                         <span>${item.requested_quantity} ${item.unit}</span>
                                     </div>
                                     ${item.specification && item.specification !== '-' ? `<div class="text-xs text-blue-700 mt-1 bg-blue-50 p-1.5 rounded whitespace-pre-wrap font-mono">${item.specification}</div>` : ''}
@@ -608,7 +605,6 @@ HTML_CONTENT = """
                         itemsHtml += '</div>';
                     }
 
-                    // Даты для карточки
                     let createdStr = order.created_at ? new Date(order.created_at).toLocaleDateString() : '';
                     let approvedStr = order.approved_at ? `<span class="ml-2 text-purple-600">✓ Утв: ${new Date(order.approved_at).toLocaleDateString()}</span>` : '';
 
@@ -662,6 +658,10 @@ HTML_CONTENT = """
             let itemsDetails = '';
             if (order.items) {
                 order.items.forEach((item, idx) => {
+                    let itemDownloadBtn = item.tech_spec_file && item.tech_spec_file !== '-' && item.tech_spec_file !== 'Не прикреплен'
+                        ? `<button onclick="downloadTechSpec('${order.id}', '${item.tech_spec_file}')" class="mt-2 inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs font-semibold hover:bg-blue-100 transition cursor-pointer">📥 Скачать ТЗ (${item.tech_spec_file})</button>`
+                        : '<div class="mt-2 text-gray-400 text-xs">Файл ТЗ не прикреплен</div>';
+
                     itemsDetails += `
                         <div class="bg-gray-50 p-3 rounded-lg border border-gray-200 space-y-1 relative">
                             <span class="absolute top-2 right-2 text-xs font-bold text-gray-400">Позиция ${idx + 1}</span>
@@ -671,14 +671,11 @@ HTML_CONTENT = """
                             <div><b>Поставщик (ожидаемый):</b> ${item.supplier || '-'}</div>
                             <div><b>Допуск аналога:</b> ${item.allow_analog ? 'Да' : 'Нет'}</div>
                             ${item.specification && item.specification !== '-' ? `<div class="mt-2 text-blue-800 bg-blue-100 p-2 rounded text-sm whitespace-pre-wrap font-mono"><b>Спецификация:</b><br>${item.specification}</div>` : ''}
+                            ${itemDownloadBtn}
                         </div>
                     `;
                 });
             }
-
-            let downloadBtnHtml = order.tech_spec_file && order.tech_spec_file !== '-' && order.tech_spec_file !== 'Не прикреплен'
-                ? `<button onclick="downloadTechSpec('${order.id}', '${order.tech_spec_file}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 transition cursor-pointer">📥 Скачать ТЗ (${order.tech_spec_file})</button>`
-                : '<span class="text-gray-400 text-xs">Файл ТЗ не прикреплен</span>';
 
             let supplierInfoHtml = '';
             if (order.status === 'Заказан поставщику' || order.status === 'На складе' || order.status === 'Выполнен') {
@@ -711,10 +708,6 @@ HTML_CONTENT = """
                     <p><b>Направление:</b> ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
                     <p><b>Приоритет:</b> ${order.priority}</p>
                     <p><b>Необходимая дата:</b> <span class="text-red-600 font-bold">${order.planned_date || 'Не указана'}</span></p>
-                    <div class="pt-1">
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание:</label>
-                        ${downloadBtnHtml}
-                    </div>
                     ${order.comment ? `<div class="mt-2 text-red-600"><b>Комментарий/История:</b><div class="whitespace-pre-wrap text-sm border-l-2 border-red-400 pl-2 mt-1 bg-red-50 py-1 pr-1">${order.comment}</div></div>` : ''}
                     
                     <hr class="my-2">
@@ -784,7 +777,6 @@ async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends
         executing_dept_id=order_data.executing_dept_id,
         priority=order_data.priority,
         planned_date=order_data.planned_date,
-        tech_spec_file=order_data.tech_spec_file,
         comment=order_data.comment,
         status="Черновик"
     )
@@ -810,7 +802,6 @@ async def edit_order(order_id: str, order_data: OrderCreateSchema, db: AsyncSess
     order.executing_dept_id = order_data.executing_dept_id
     order.priority = order_data.priority
     order.planned_date = order_data.planned_date
-    order.tech_spec_file = order_data.tech_spec_file
     order.comment = order_data.comment
     
     await db.execute(delete(OrderItemModel).where(OrderItemModel.order_id == order_id))
@@ -867,7 +858,6 @@ async def get_all_orders(db: AsyncSession = Depends(get_db)):
             "executing_dept_id": order.executing_dept_id,
             "priority": order.priority,
             "planned_date": order.planned_date,
-            "tech_spec_file": order.tech_spec_file,
             "comment": order.comment,
             "supplier_name": order.supplier_name,
             "contract_number": order.contract_number,
@@ -888,6 +878,7 @@ async def get_all_orders(db: AsyncSession = Depends(get_db)):
                     "manufacturer": item.manufacturer,
                     "supplier": item.supplier,
                     "specification": item.specification,
+                    "tech_spec_file": item.tech_spec_file,
                     "comment": item.comment
                 } for item in order.items
             ]
