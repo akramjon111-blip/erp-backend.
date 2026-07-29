@@ -38,8 +38,8 @@ class OrderModel(Base):
     executing_dept_id = Column(String)
     priority = Column(String, default="Средний")
     planned_date = Column(String, nullable=True)
-    specification = Column(String, nullable=True)          # Новое: Спецификация
-    tech_spec_file = Column(String, nullable=True)         # Новое: Файл ТЗ
+    specification = Column(String, nullable=True)
+    tech_spec_file = Column(String, nullable=True)
     comment = Column(String, nullable=True)
     responsible_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     items = relationship("OrderItemModel", back_populates="order", cascade="all, delete-orphan")
@@ -133,6 +133,7 @@ HTML_CONTENT = """
         </div>
     </main>
 
+    <!-- Модальное окно создания заказа -->
     <div id="orderModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
         <div class="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
             <h2 class="text-lg font-bold mb-4 text-gray-800">Создание нового заказа</h2>
@@ -240,6 +241,22 @@ HTML_CONTENT = """
         </div>
     </div>
 
+    <!-- Модальное окно детализации заказа -->
+    <div id="detailModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
+        <div class="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4 border-b pb-2">
+                <h2 id="detModalTitle" class="text-lg font-bold text-gray-800">Детали заказа</h2>
+                <button onclick="closeDetailModal()" class="text-gray-400 hover:text-gray-600 font-bold text-lg">&times;</button>
+            </div>
+            <div id="detModalBody" class="space-y-4 text-sm text-gray-700">
+                <!-- Сюда динамически подгружается инфо -->
+            </div>
+            <div class="flex justify-end mt-6 pt-3 border-t">
+                <button onclick="closeDetailModal()" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const modal = document.getElementById('orderModal');
         const fabAdd = document.getElementById('fabAdd');
@@ -252,9 +269,13 @@ HTML_CONTENT = """
             orderForm.reset();
         });
 
+        function closeDetailModal() {
+            document.getElementById('detailModal').classList.add('hidden');
+        }
+
+        // Отправка формы нового заказа
         orderForm.addEventListener('submit', async (e) => {
             e.preventDefault(); 
-            
             const fileInput = document.getElementById('techSpecFile');
             const fileName = fileInput.files.length > 0 ? fileInput.files[0].name : 'Не прикреплен';
 
@@ -301,6 +322,7 @@ HTML_CONTENT = """
             }
         });
 
+        // Загрузка и рендеринг списка заказов
         async function loadApp() {
             const main = document.getElementById('mainContent');
             try {
@@ -341,8 +363,9 @@ HTML_CONTENT = """
                         itemsHtml += '</div>';
                     }
 
+                    // Карточка заказа кликабельна
                     html += `
-                        <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                        <div onclick='openDetail(${JSON.stringify(order)})' class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-blue-400 cursor-pointer transition">
                             <div class="flex justify-between items-start mb-2">
                                 <div>
                                     <div class="flex items-center gap-2 flex-wrap">
@@ -357,7 +380,7 @@ HTML_CONTENT = """
                             <div class="text-xs text-gray-600 mb-1 flex gap-4 flex-wrap">
                                 ${order.planned_date ? `<span>📅 План: <b>${order.planned_date}</b></span>` : ''}
                                 ${order.specification ? `<span>📋 Спецификация: <b>${order.specification}</b></span>` : ''}
-                                ${order.tech_spec_file ? `<span>📎 ТЗ: <b>${order.tech_spec_file}</b></span>` : ''}
+                                ${order.tech_spec_file ? `<span>📎 ТЗ: <b class="text-blue-600">${order.tech_spec_file}</b></span>` : ''}
                             </div>
                             
                             ${order.comment ? `<p class="text-xs text-gray-500 italic mb-2">💬 "${order.comment}"</p>` : ''}
@@ -370,6 +393,52 @@ HTML_CONTENT = """
             } catch (error) {
                 main.innerHTML = '<div class="flex items-center justify-center h-full"><p class="text-red-500">Ошибка подключения к серверу</p></div>';
             }
+        }
+
+        // Открытие детальной информации по клику на карточку
+        function openDetail(order) {
+            document.getElementById('detModalTitle').innerText = `Детали заказа #${order.id}`;
+            
+            let itemsDetails = '';
+            if (order.items) {
+                order.items.forEach(item => {
+                    itemsDetails += `
+                        <div class="bg-gray-50 p-3 rounded-lg border border-gray-200 space-y-1">
+                            <div><b>Наименование:</b> ${item.name} (${item.material_code})</div>
+                            <div><b>Количество:</b> ${item.requested_quantity} ${item.unit}</div>
+                            <div><b>Производитель:</b> ${item.manufacturer || '-'}</div>
+                            <div><b>Поставщик:</b> ${item.supplier || '-'}</div>
+                            <div><b>Допуск аналога:</b> ${item.allow_analog ? 'Да' : 'Нет'}</div>
+                        </div>
+                    `;
+                });
+            }
+
+            // Кнопка загрузки/скачивания ТЗ
+            let downloadBtnHtml = order.tech_spec_file && order.tech_spec_file !== '-' 
+                ? `<a href="#" onclick="alert('Скачивание файла: ${order.tech_spec_file}'); return false;" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 transition">📥 Скачать ТЗ (${order.tech_spec_file})</a>`
+                : '<span class="text-gray-400 text-xs">Файл ТЗ не прикреплен</span>';
+
+            document.getElementById('detModalBody').innerHTML = `
+                <div class="space-y-2">
+                    <p><b>Статус:</b> <span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold">${order.status}</span></p>
+                    <p><b>Предприятие:</b> ${order.enterprise || '-'}</p>
+                    <p><b>Направление:</b> ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
+                    <p><b>Приоритет:</b> ${order.priority}</p>
+                    <p><b>Плановая дата:</b> ${order.planned_date}</p>
+                    <p><b>Спецификация:</b> ${order.specification || '-'}</p>
+                    <p><b>Дата создания:</b> ${new Date(order.created_at).toLocaleString()}</p>
+                    <div class="pt-2">
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание:</label>
+                        ${downloadBtnHtml}
+                    </div>
+                    ${order.comment ? `<p><b>Комментарий:</b> ${order.comment}</p>` : ''}
+                    <hr class="my-2">
+                    <h4 class="font-bold text-gray-800">Позиция материала:</h4>
+                    ${itemsDetails}
+                </div>
+            `;
+            document.getElementById('detailModal').classList.remove('hidden');
         }
 
         loadApp();
