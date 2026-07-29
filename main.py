@@ -249,7 +249,7 @@ HTML_CONTENT = """
                 <button onclick="closeDetailModal()" class="text-gray-400 hover:text-gray-600 font-bold text-lg">&times;</button>
             </div>
             <div id="detModalBody" class="space-y-4 text-sm text-gray-700">
-                <!-- Сюда динамически подгружается инфо -->
+                <!-- Контент детализации -->
             </div>
             <div class="flex justify-end mt-6 pt-3 border-t">
                 <button onclick="closeDetailModal()" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">Закрыть</button>
@@ -258,6 +258,8 @@ HTML_CONTENT = """
     </div>
 
     <script>
+        let ordersCache = []; // Глобальный кеш заказов
+
         const modal = document.getElementById('orderModal');
         const fabAdd = document.getElementById('fabAdd');
         const closeModalBtn = document.getElementById('closeModalBtn');
@@ -330,6 +332,8 @@ HTML_CONTENT = """
                 if (!response.ok) throw new Error('Ошибка сети');
                 
                 const orders = await response.json();
+                ordersCache = orders; // Сохраняем в кеш
+                
                 if (!orders || orders.length === 0) {
                     main.innerHTML = '<div class="flex items-center justify-center h-full"><p class="text-gray-500">У вас пока нет заказов</p></div>';
                     return;
@@ -363,9 +367,9 @@ HTML_CONTENT = """
                         itemsHtml += '</div>';
                     }
 
-                    // Карточка заказа кликабельна
+                    // Передаем только ID заказа по клику
                     html += `
-                        <div onclick='openDetail(${JSON.stringify(order)})' class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-blue-400 cursor-pointer transition">
+                        <div onclick="openDetail('${order.id}')" class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-blue-400 cursor-pointer transition">
                             <div class="flex justify-between items-start mb-2">
                                 <div>
                                     <div class="flex items-center gap-2 flex-wrap">
@@ -395,8 +399,11 @@ HTML_CONTENT = """
             }
         }
 
-        // Открытие детальной информации по клику на карточку
-        function openDetail(order) {
+        // Открытие модального окна по ID заказа из кеша
+        function openDetail(orderId) {
+            const order = ordersCache.find(o => o.id === orderId);
+            if (!order) return;
+
             document.getElementById('detModalTitle').innerText = `Детали заказа #${order.id}`;
             
             let itemsDetails = '';
@@ -414,8 +421,7 @@ HTML_CONTENT = """
                 });
             }
 
-            // Кнопка загрузки/скачивания ТЗ
-            let downloadBtnHtml = order.tech_spec_file && order.tech_spec_file !== '-' 
+            let downloadBtnHtml = order.tech_spec_file && order.tech_spec_file !== '-' && order.tech_spec_file !== 'Не прикреплен'
                 ? `<a href="#" onclick="alert('Скачивание файла: ${order.tech_spec_file}'); return false;" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 transition">📥 Скачать ТЗ (${order.tech_spec_file})</a>`
                 : '<span class="text-gray-400 text-xs">Файл ТЗ не прикреплен</span>';
 
