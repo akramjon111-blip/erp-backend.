@@ -38,7 +38,6 @@ class OrderModel(Base):
     executing_dept_id = Column(String)
     priority = Column(String, default="Средний")
     planned_date = Column(String, nullable=True)
-    specification = Column(String, nullable=True)
     tech_spec_file = Column(String, nullable=True)
     comment = Column(String, nullable=True)
     responsible_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -67,6 +66,7 @@ class OrderItemModel(Base):
     allow_analog = Column(Boolean, default=True)
     manufacturer = Column(String, nullable=True)
     supplier = Column(String, nullable=True)
+    specification = Column(String, nullable=True) # Спецификация перенесена сюда
     comment = Column(String, nullable=True)
     order = relationship("OrderModel", back_populates="items")
 
@@ -83,6 +83,7 @@ class OrderItemBase(BaseModel):
     allow_analog: bool = True
     manufacturer: Optional[str] = "-"
     supplier: Optional[str] = "-"
+    specification: Optional[str] = "-" # Спецификация перенесена сюда
     comment: Optional[str] = None
 
 class OrderCreateSchema(BaseModel):
@@ -92,7 +93,6 @@ class OrderCreateSchema(BaseModel):
     executing_dept_id: str
     priority: Optional[str] = "Средний"
     planned_date: Optional[str] = "Не указана"
-    specification: Optional[str] = "-"
     tech_spec_file: Optional[str] = "-"
     comment: Optional[str] = None
     items: List[OrderItemBase]
@@ -194,28 +194,21 @@ HTML_CONTENT = """
                         <input type="date" id="plannedDate" class="w-full border border-gray-300 rounded-lg p-2 text-sm">
                     </div>
                     <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Спецификация</label>
-                        <input type="text" id="specification" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="№ спецификации">
-                    </div>
-                </div>
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание (ТЗ)</label>
-                        <div id="currentFileBox" class="hidden mb-2 bg-blue-50 text-blue-700 text-xs px-2 py-1.5 rounded flex justify-between items-center border border-blue-100">
-                            <span id="currentFileName" class="truncate max-w-[120px] font-medium">Файл.docx</span>
-                            <button type="button" onclick="removeCurrentFile()" class="text-red-500 hover:text-red-700 font-bold ml-2" title="Удалить прикрепленный файл">✕ Удалить</button>
-                        </div>
-                        <input type="file" id="techSpecFile" class="w-full border border-gray-200 rounded-lg p-1 text-xs bg-white text-gray-500">
-                    </div>
-                    <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Общий комментарий</label>
                         <input type="text" id="orderComment" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Примечания...">
                     </div>
                 </div>
+                <div class="mt-2">
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание (ТЗ)</label>
+                    <div id="currentFileBox" class="hidden mb-2 bg-blue-50 text-blue-700 text-xs px-2 py-1.5 rounded flex justify-between items-center border border-blue-100">
+                        <span id="currentFileName" class="truncate max-w-[120px] font-medium">Файл.docx</span>
+                        <button type="button" onclick="removeCurrentFile()" class="text-red-500 hover:text-red-700 font-bold ml-2" title="Удалить прикрепленный файл">✕ Удалить</button>
+                    </div>
+                    <input type="file" id="techSpecFile" class="w-full border border-gray-200 rounded-lg p-1 text-xs bg-white text-gray-500">
+                </div>
                 
                 <hr class="my-3 border-gray-200">
                 
-                <!-- Заголовок и кнопка добавления позиций -->
                 <div class="flex justify-between items-center mb-2">
                     <h3 class="font-bold text-sm text-gray-700">Позиции (Товары / Услуги)</h3>
                     <button type="button" onclick="addItemRow()" class="bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1 rounded-lg text-xs font-bold transition shadow-sm">+ Добавить позицию</button>
@@ -223,7 +216,7 @@ HTML_CONTENT = """
                 
                 <!-- Контейнер для динамических строк позиций -->
                 <div id="itemsContainer" class="space-y-3">
-                    <!-- JavaScript будет вставлять сюда блоки товаров -->
+                    <!-- JS вставляет блоки сюда -->
                 </div>
                 
                 <div class="flex justify-end space-x-2 mt-5 pt-3 border-t border-gray-200">
@@ -261,12 +254,11 @@ HTML_CONTENT = """
         const orderForm = document.getElementById('orderForm');
         const itemsContainer = document.getElementById('itemsContainer');
 
-        // ФУНКЦИЯ ДОБАВЛЕНИЯ НОВОЙ ПОЗИЦИИ В ФОРМУ
+        // ФУНКЦИЯ ДОБАВЛЕНИЯ НОВОЙ ПОЗИЦИИ (ТЕПЕРЬ СО СПЕЦИФИКАЦИЕЙ)
         function addItemRow(itemData = null) {
             const row = document.createElement('div');
             row.className = 'item-row bg-gray-50 p-3 rounded-lg border border-gray-200 relative';
             
-            // Кнопка удаления позиции
             const removeBtn = `<button type="button" onclick="this.closest('.item-row').remove()" class="absolute top-2 right-2 text-red-500 hover:text-red-700 text-xs font-bold bg-white px-2 py-0.5 rounded border border-red-200 shadow-sm">✕ Удалить</button>`;
 
             row.innerHTML = `
@@ -298,13 +290,17 @@ HTML_CONTENT = """
                         </select>
                     </div>
                 </div>
-                <div class="grid grid-cols-2 gap-2">
+                <div class="grid grid-cols-3 gap-2">
                     <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Производитель</label>
-                        <input type="text" class="i-manuf w-full border border-gray-300 rounded p-1.5 text-xs bg-white" placeholder="SKF / Bosch" value="${itemData ? (itemData.manufacturer || '') : ''}">
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Спецификация</label>
+                        <input type="text" class="i-spec w-full border border-gray-300 rounded p-1.5 text-xs bg-white" placeholder="№ спец..." value="${itemData ? (itemData.specification || '') : ''}">
                     </div>
                     <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Ожидаемый поставщик</label>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Производитель</label>
+                        <input type="text" class="i-manuf w-full border border-gray-300 rounded p-1.5 text-xs bg-white" placeholder="Бренд" value="${itemData ? (itemData.manufacturer || '') : ''}">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Поставщик</label>
                         <input type="text" class="i-supp w-full border border-gray-300 rounded p-1.5 text-xs bg-white" placeholder="ООО..." value="${itemData ? (itemData.supplier || '') : ''}">
                     </div>
                 </div>
@@ -320,7 +316,6 @@ HTML_CONTENT = """
             document.getElementById('currentFileBox').classList.add('hidden');
             orderForm.reset();
             
-            // Очищаем и добавляем одну пустую позицию по умолчанию
             itemsContainer.innerHTML = '';
             addItemRow();
             
@@ -355,7 +350,6 @@ HTML_CONTENT = """
             document.getElementById('reqDept').value = order.requesting_dept_id || '';
             document.getElementById('execDept').value = order.executing_dept_id || '';
             document.getElementById('plannedDate').value = order.planned_date || '';
-            document.getElementById('specification').value = order.specification && order.specification !== '-' ? order.specification : '';
             document.getElementById('orderComment').value = order.comment || '';
 
             existingFileName = order.tech_spec_file;
@@ -366,12 +360,11 @@ HTML_CONTENT = """
                 document.getElementById('currentFileBox').classList.add('hidden');
             }
 
-            // Очищаем контейнер и рендерим все существующие позиции
             itemsContainer.innerHTML = '';
             if (order.items && order.items.length > 0) {
                 order.items.forEach(item => addItemRow(item));
             } else {
-                addItemRow(); // Если вдруг пустой, добавляем хотя бы одну строку
+                addItemRow();
             }
 
             modal.classList.remove('hidden');
@@ -380,7 +373,6 @@ HTML_CONTENT = """
         orderForm.addEventListener('submit', async (e) => {
             e.preventDefault(); 
             
-            // СБОР ДАННЫХ ИЗ ВСЕХ БЛОКОВ ПОЗИЦИЙ
             const itemsList = [];
             document.querySelectorAll('.item-row').forEach(row => {
                 itemsList.push({
@@ -391,7 +383,8 @@ HTML_CONTENT = """
                     stock_balance: 0,
                     allow_analog: row.querySelector('.i-analog').value === 'true',
                     manufacturer: row.querySelector('.i-manuf').value.trim() || '-',
-                    supplier: row.querySelector('.i-supp').value.trim() || '-'
+                    supplier: row.querySelector('.i-supp').value.trim() || '-',
+                    specification: row.querySelector('.i-spec').value.trim() || '-'
                 });
             });
 
@@ -415,7 +408,6 @@ HTML_CONTENT = """
                 executing_dept_id: document.getElementById('execDept').value,
                 priority: document.getElementById('priority').value,
                 planned_date: document.getElementById('plannedDate').value || 'Не указана',
-                specification: document.getElementById('specification').value || '-',
                 tech_spec_file: finalFileName,
                 comment: document.getElementById('orderComment').value || '',
                 items: itemsList
@@ -606,10 +598,12 @@ HTML_CONTENT = """
                         itemsHtml = '<div class="mt-3 pt-3 border-t border-gray-100 space-y-2">';
                         order.items.forEach((item, index) => {
                             let analogText = item.allow_analog ? 'Аналог: Да' : 'Аналог: Нет';
+                            let specText = item.specification && item.specification !== '-' ? `<span class="ml-3 text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">Спец.: ${item.specification}</span>` : '';
+                            
                             itemsHtml += `
                                 <div class="bg-gray-50 p-2.5 rounded-lg text-sm border-l-4 border-blue-400">
                                     <div class="flex justify-between font-medium text-gray-900">
-                                        <span>${index + 1}. ${item.name} <span class="text-xs text-gray-500 font-normal">(${item.material_code})</span></span>
+                                        <span>${index + 1}. ${item.name} <span class="text-xs text-gray-500 font-normal">(${item.material_code})</span>${specText}</span>
                                         <span>${item.requested_quantity} ${item.unit}</span>
                                     </div>
                                 </div>
@@ -632,7 +626,6 @@ HTML_CONTENT = """
                             </div>
                             <div class="text-xs text-gray-600 flex gap-4 flex-wrap mb-1">
                                 ${order.planned_date ? `<span>📅 План: <b>${order.planned_date}</b></span>` : ''}
-                                ${order.specification && order.specification !== '-' ? `<span>📋 Спец.: <b>${order.specification}</b></span>` : ''}
                             </div>
                             ${order.comment ? `<p class="text-xs text-gray-500 italic mb-2">💬 "${order.comment}"</p>` : ''}
                             ${itemsHtml}
@@ -670,6 +663,7 @@ HTML_CONTENT = """
                             <span class="absolute top-2 right-2 text-xs font-bold text-gray-400">Позиция ${idx + 1}</span>
                             <div><b>Наименование:</b> ${item.name} (${item.material_code})</div>
                             <div><b>Количество:</b> ${item.requested_quantity} ${item.unit}</div>
+                            <div><b>Спецификация:</b> <span class="text-blue-700 font-semibold">${item.specification || '-'}</span></div>
                             <div><b>Производитель:</b> ${item.manufacturer || '-'}</div>
                             <div><b>Поставщик (ожидаемый):</b> ${item.supplier || '-'}</div>
                             <div><b>Допуск аналога:</b> ${item.allow_analog ? 'Да' : 'Нет'}</div>
@@ -709,7 +703,6 @@ HTML_CONTENT = """
                     <p><b>Предприятие:</b> ${order.enterprise || '-'}</p>
                     <p><b>Направление:</b> ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
                     <p><b>Приоритет:</b> ${order.priority}</p>
-                    <p><b>Спецификация:</b> ${order.specification || '-'}</p>
                     <div class="pt-1">
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание:</label>
                         ${downloadBtnHtml}
@@ -783,7 +776,6 @@ async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends
         executing_dept_id=order_data.executing_dept_id,
         priority=order_data.priority,
         planned_date=order_data.planned_date,
-        specification=order_data.specification,
         tech_spec_file=order_data.tech_spec_file,
         comment=order_data.comment,
         status="Черновик"
@@ -810,7 +802,6 @@ async def edit_order(order_id: str, order_data: OrderCreateSchema, db: AsyncSess
     order.executing_dept_id = order_data.executing_dept_id
     order.priority = order_data.priority
     order.planned_date = order_data.planned_date
-    order.specification = order_data.specification
     order.tech_spec_file = order_data.tech_spec_file
     order.comment = order_data.comment
     
@@ -864,7 +855,6 @@ async def get_all_orders(db: AsyncSession = Depends(get_db)):
             "executing_dept_id": order.executing_dept_id,
             "priority": order.priority,
             "planned_date": order.planned_date,
-            "specification": order.specification,
             "tech_spec_file": order.tech_spec_file,
             "comment": order.comment,
             "supplier_name": order.supplier_name,
@@ -885,6 +875,7 @@ async def get_all_orders(db: AsyncSession = Depends(get_db)):
                     "allow_analog": item.allow_analog,
                     "manufacturer": item.manufacturer,
                     "supplier": item.supplier,
+                    "specification": item.specification,
                     "comment": item.comment
                 } for item in order.items
             ]
