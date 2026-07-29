@@ -86,6 +86,9 @@ class OrderCreateSchema(BaseModel):
     comment: Optional[str] = None
     items: List[OrderItemBase]
 
+class OrderStatusUpdateSchema(BaseModel):
+    status: str
+
 # --- ПРИЛОЖЕНИЕ ---
 app = FastAPI(title="ERP Order Management API")
 
@@ -241,7 +244,7 @@ HTML_CONTENT = """
         </div>
     </div>
 
-    <!-- Модальное окно детализации заказа -->
+    <!-- Модальное окно детализации заказа (с футером для кнопок статуса) -->
     <div id="detailModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
         <div class="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
             <div class="flex justify-between items-center mb-4 border-b pb-2">
@@ -251,8 +254,8 @@ HTML_CONTENT = """
             <div id="detModalBody" class="space-y-4 text-sm text-gray-700">
                 <!-- Контент детализации -->
             </div>
-            <div class="flex justify-end mt-6 pt-3 border-t">
-                <button onclick="closeDetailModal()" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">Закрыть</button>
+            <div id="detModalFooter" class="flex justify-end gap-2 mt-6 pt-3 border-t">
+                <!-- Кнопки управления статусами добавятся сюда JS-ом -->
             </div>
         </div>
     </div>
@@ -287,6 +290,25 @@ HTML_CONTENT = """
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+        }
+
+        // Обновление статуса на сервере
+        async function changeStatus(orderId, newStatus) {
+            try {
+                const response = await fetch(`/api/orders/${orderId}/status`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus })
+                });
+                if (response.ok) {
+                    closeDetailModal();
+                    loadApp(); // Перезагружаем список
+                } else {
+                    alert('Ошибка при смене статуса');
+                }
+            } catch (error) {
+                alert('Ошибка сети.');
+            }
         }
 
         orderForm.addEventListener('submit', async (e) => {
@@ -324,7 +346,6 @@ HTML_CONTENT = """
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(newOrder)
                 });
-
                 if (response.ok) {
                     modal.classList.add('hidden'); 
                     orderForm.reset();             
@@ -356,6 +377,14 @@ HTML_CONTENT = """
                     let priorityColor = 'bg-gray-100 text-gray-700';
                     if (order.priority === 'Высокий') priorityColor = 'bg-red-100 text-red-700';
                     if (order.priority === 'Средний') priorityColor = 'bg-amber-100 text-amber-700';
+
+                    // Цветовые бейджики для статусов по ТЗ
+                    let statusColor = 'bg-blue-100 text-blue-700';
+                    if (order.status === 'На согласовании') statusColor = 'bg-yellow-100 text-yellow-700';
+                    if (order.status === 'Принят в работу') statusColor = 'bg-purple-100 text-purple-700';
+                    if (order.status === 'Заказан поставщику') statusColor = 'bg-indigo-100 text-indigo-700';
+                    if (order.status === 'На складе') statusColor = 'bg-orange-100 text-orange-700';
+                    if (order.status === 'Выполнен') statusColor = 'bg-green-100 text-green-700';
 
                     let itemsHtml = '';
                     if (order.items && order.items.length > 0) {
@@ -389,7 +418,7 @@ HTML_CONTENT = """
                                     </div>
                                     <p class="text-xs text-gray-500 mt-1">🏭 ${order.enterprise || 'Завод'} | ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
                                 </div>
-                                <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">${order.status || 'Черновик'}</span>
+                                <span class="text-xs font-bold px-2.5 py-1 rounded-full ${statusColor}">${order.status}</span>
                             </div>
                             
                             <div class="text-xs text-gray-600 mb-1 flex gap-4 flex-wrap">
@@ -416,6 +445,14 @@ HTML_CONTENT = """
 
             document.getElementById('detModalTitle').innerText = `Детали заказа #${order.id}`;
             
+            let statusBadge = `<span class="px-2 py-0.5 rounded font-semibold text-white bg-gray-500">${order.status}</span>`;
+            if (order.status === 'Черновик') statusBadge = `<span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold">${order.status}</span>`;
+            if (order.status === 'На согласовании') statusBadge = `<span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded font-semibold">${order.status}</span>`;
+            if (order.status === 'Принят в работу') statusBadge = `<span class="px-2 py-0.5 bg-purple-100 text-purple-700 rounded font-semibold">${order.status}</span>`;
+            if (order.status === 'Заказан поставщику') statusBadge = `<span class="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded font-semibold">${order.status}</span>`;
+            if (order.status === 'На складе') statusBadge = `<span class="px-2 py-0.5 bg-orange-100 text-orange-700 rounded font-semibold">${order.status}</span>`;
+            if (order.status === 'Выполнен') statusBadge = `<span class="px-2 py-0.5 bg-green-100 text-green-700 rounded font-semibold">${order.status}</span>`;
+
             let itemsDetails = '';
             if (order.items) {
                 order.items.forEach(item => {
@@ -437,7 +474,7 @@ HTML_CONTENT = """
 
             document.getElementById('detModalBody').innerHTML = `
                 <div class="space-y-2">
-                    <p><b>Статус:</b> <span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold">${order.status}</span></p>
+                    <p><b>Статус:</b> ${statusBadge}</p>
                     <p><b>Предприятие:</b> ${order.enterprise || '-'}</p>
                     <p><b>Направление:</b> ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
                     <p><b>Приоритет:</b> ${order.priority}</p>
@@ -454,6 +491,23 @@ HTML_CONTENT = """
                     ${itemsDetails}
                 </div>
             `;
+
+            // Логика кнопок статуса (Workflow)
+            let actionButtons = `<button onclick="closeDetailModal()" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Закрыть</button>`;
+            
+            if (order.status === 'Черновик') {
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'На согласовании')" class="px-4 py-2 text-sm font-medium text-white bg-yellow-500 rounded-lg hover:bg-yellow-600">Отправить на согласование</button>`;
+            } else if (order.status === 'На согласовании') {
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'Принят в работу')" class="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700">Утвердить (В работу)</button>`;
+            } else if (order.status === 'Принят в работу') {
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'Заказан поставщику')" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700">Сделать заказ поставщику</button>`;
+            } else if (order.status === 'Заказан поставщику') {
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'На складе')" class="px-4 py-2 text-sm font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600">Принять на склад</button>`;
+            } else if (order.status === 'На складе') {
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'Выполнен')" class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700">Выдать и завершить</button>`;
+            }
+
+            document.getElementById('detModalFooter').innerHTML = actionButtons;
             document.getElementById('detailModal').classList.remove('hidden');
         }
 
@@ -494,6 +548,17 @@ async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends
     await db.refresh(new_order, attribute_names=['items'])
     
     return {"status": "success", "id": new_order.id}
+
+@app.patch("/api/orders/{order_id}/status")
+async def update_order_status(order_id: str, payload: OrderStatusUpdateSchema, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(OrderModel).filter_by(id=order_id))
+    order = result.scalars().first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Заказ не найден")
+    
+    order.status = payload.status
+    await db.commit()
+    return {"status": "success", "new_status": order.status}
 
 @app.get("/api/orders", response_model=List[dict])
 async def get_all_orders(db: AsyncSession = Depends(get_db)):
