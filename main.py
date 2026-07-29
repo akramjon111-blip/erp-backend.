@@ -1,4 +1,4 @@
-ffrom fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
