@@ -38,6 +38,8 @@ class OrderModel(Base):
     executing_dept_id = Column(String)
     priority = Column(String, default="Средний")
     planned_date = Column(String, nullable=True)
+    specification = Column(String, nullable=True)          # Новое: Спецификация
+    tech_spec_file = Column(String, nullable=True)         # Новое: Файл ТЗ
     comment = Column(String, nullable=True)
     responsible_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     items = relationship("OrderItemModel", back_populates="order", cascade="all, delete-orphan")
@@ -79,6 +81,8 @@ class OrderCreateSchema(BaseModel):
     executing_dept_id: str
     priority: Optional[str] = "Средний"
     planned_date: Optional[str] = "Не указана"
+    specification: Optional[str] = "-"
+    tech_spec_file: Optional[str] = "-"
     comment: Optional[str] = None
     items: List[OrderItemBase]
 
@@ -104,7 +108,7 @@ async def startup_event():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-# --- ВСТРОЕННЫЙ HTML ИНТЕРФЕЙС (100% гарантия отображения) ---
+# --- ВСТРОЕННЫЙ HTML ИНТЕРФЕЙС ---
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -167,6 +171,17 @@ HTML_CONTENT = """
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Плановая дата получения</label>
                         <input type="date" id="plannedDate" class="w-full border border-gray-300 rounded-lg p-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Спецификация</label>
+                        <input type="text" id="specification" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="№ спецификации">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание (ТЗ)</label>
+                        <input type="file" id="techSpecFile" class="w-full border border-gray-200 rounded-lg p-1 text-xs bg-white text-gray-500">
                     </div>
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Общий комментарий</label>
@@ -240,6 +255,9 @@ HTML_CONTENT = """
         orderForm.addEventListener('submit', async (e) => {
             e.preventDefault(); 
             
+            const fileInput = document.getElementById('techSpecFile');
+            const fileName = fileInput.files.length > 0 ? fileInput.files[0].name : 'Не прикреплен';
+
             const newOrder = {
                 id: Math.floor(Math.random() * 90000 + 10000).toString(), 
                 enterprise: document.getElementById('enterprise').value,
@@ -247,6 +265,8 @@ HTML_CONTENT = """
                 executing_dept_id: document.getElementById('execDept').value,
                 priority: document.getElementById('priority').value,
                 planned_date: document.getElementById('plannedDate').value || 'Не указана',
+                specification: document.getElementById('specification').value || '-',
+                tech_spec_file: fileName,
                 comment: document.getElementById('orderComment').value || '',
                 items: [
                     {
@@ -333,7 +353,13 @@ HTML_CONTENT = """
                                 </div>
                                 <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">${order.status || 'Черновик'}</span>
                             </div>
-                            ${order.planned_date ? `<p class="text-xs text-gray-600 mb-1">📅 План получения: <b>${order.planned_date}</b></p>` : ''}
+                            
+                            <div class="text-xs text-gray-600 mb-1 flex gap-4 flex-wrap">
+                                ${order.planned_date ? `<span>📅 План: <b>${order.planned_date}</b></span>` : ''}
+                                ${order.specification ? `<span>📋 Спецификация: <b>${order.specification}</b></span>` : ''}
+                                ${order.tech_spec_file ? `<span>📎 ТЗ: <b>${order.tech_spec_file}</b></span>` : ''}
+                            </div>
+                            
                             ${order.comment ? `<p class="text-xs text-gray-500 italic mb-2">💬 "${order.comment}"</p>` : ''}
                             ${itemsHtml}
                         </div>
@@ -370,6 +396,8 @@ async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends
         executing_dept_id=order_data.executing_dept_id,
         priority=order_data.priority,
         planned_date=order_data.planned_date,
+        specification=order_data.specification,
+        tech_spec_file=order_data.tech_spec_file,
         comment=order_data.comment,
         status="Черновик"
     )
@@ -398,6 +426,8 @@ async def get_all_orders(db: AsyncSession = Depends(get_db)):
             "executing_dept_id": order.executing_dept_id,
             "priority": order.priority,
             "planned_date": order.planned_date,
+            "specification": order.specification,
+            "tech_spec_file": order.tech_spec_file,
             "comment": order.comment,
             "items": [
                 {
