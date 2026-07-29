@@ -1,44 +1,24 @@
-from fastapi import Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-import os
-import uvicorn
-from datetime import datetime, timedelta
-from typing import List, Optional
-
-import jwt
-from fastapi import Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-
 from fastapi import FastAPI, Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Float, Boolean, Enum, update
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Float, Boolean, update
 from sqlalchemy.orm import declarative_base, relationship, selectinload
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.future import select
 import enum
+from datetime import datetime, timedelta
+from typing import List, Optional
+import jwt
 
 # --- КОНФИГУРАЦИЯ ---
 SECRET_KEY = "super_secret_key_change_me"
 ALGORITHM = "HS256"
 DATABASE_URL = "sqlite+aiosqlite:///./erp_orders.db"
 
-# --- БАЗА ДАННЫХ (SQLAlchemy ORM) ---
+# --- БАЗА ДАННЫХ ---
 Base = declarative_base()
-
-class OrderStatus(str, enum.Enum):
-    DRAFT = "Черновик"
-    PENDING_APPROVAL = "На согласовании"
-    IN_PURCHASING = "Принят в работу"
-    COMPLETED = "Выполнен"
-
-class UserRole(str, enum.Enum):
-    INITIATOR = "INITIATOR"
-    MANAGER = "MANAGER"
-    PURCHASER = "PURCHASER"
-    COURIER = "COURIER"
 
 class UserModel(Base):
     __tablename__ = "users"
@@ -46,20 +26,19 @@ class UserModel(Base):
     username = Column(String, unique=True, index=True)
     password_hash = Column(String)
     name = Column(String)
-    role = Column(Enum(UserRole))
-    fcm_token = Column(String, nullable=True)
+    role = Column(String)
 
 class OrderModel(Base):
     __tablename__ = "orders"
     id = Column(String, primary_key=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    status = Column(Enum(OrderStatus, values_callable=lambda obj: [e.value for e in obj]), default=OrderStatus.DRAFT)
-    enterprise = Column(String, nullable=True)             # Новое по ТЗ: Предприятие[cite: 1]
+    status = Column(String, default="Черновик")
+    enterprise = Column(String, nullable=True)
     requesting_dept_id = Column(String)
     executing_dept_id = Column(String)
-    priority = Column(String, default="Средний")            # Новое по ТЗ: Приоритет[cite: 1]
-    planned_date = Column(String, nullable=True)            # Новое по ТЗ: Плановая дата получения[cite: 1]
-    comment = Column(String, nullable=True)                 # Новое по ТЗ: Комментарий[cite: 1]
+    priority = Column(String, default="Средний")
+    planned_date = Column(String, nullable=True)
+    comment = Column(String, nullable=True)
     responsible_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     items = relationship("OrderItemModel", back_populates="order", cascade="all, delete-orphan")
 
@@ -72,36 +51,16 @@ class OrderItemModel(Base):
     unit = Column(String)
     requested_quantity = Column(Float)
     stock_balance = Column(Float, default=0)
-    allow_analog = Column(Boolean, default=False)           # Новое по ТЗ: Аналог допускается[cite: 1]
-    manufacturer = Column(String, nullable=True)            # Новое по ТЗ: Производитель[cite: 1]
-    supplier = Column(String, nullable=True)                # Новое по ТЗ: Поставщик[cite: 1]
-    comment = Column(String, nullable=True)                 # Комментарий к позиции
-    order = relationship("OrderModel", back_populates="items")
-
-class StatusHistoryModel(Base):
-    __tablename__ = "status_history"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    order_id = Column(String, ForeignKey("orders.id"))
-    changed_at = Column(DateTime, default=datetime.utcnow)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    old_status = Column(String, nullable=True)
-    new_status = Column(String)
+    allow_analog = Column(Boolean, default=True)
+    manufacturer = Column(String, nullable=True)
+    supplier = Column(String, nullable=True)
     comment = Column(String, nullable=True)
+    order = relationship("OrderModel", back_populates="items")
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
-# --- Pydantic Схемы (API Контракты) ---
-class LoginSchema(BaseModel):
-    username: str
-    password: str
-
-class FcmTokenSchema(BaseModel):
-    fcm_token: str
-
-class OrderAssignSchema(BaseModel):
-    employee_id: int
-
+# --- PYDANTIC СХЕМЫ ---
 class OrderItemBase(BaseModel):
     material_code: str
     name: str
@@ -123,29 +82,8 @@ class OrderCreateSchema(BaseModel):
     comment: Optional[str] = None
     items: List[OrderItemBase]
 
-class OrderResponseSchema(BaseModel):
-    id: str
-    created_at: datetime
-    status: str
-    enterprise: Optional[str]
-    requesting_dept_id: str
-    executing_dept_id: str
-    priority: Optional[str]
-    planned_date: Optional[str]
-    comment: Optional[str]
-    responsible_user_id: Optional[int]
-    items: List[OrderItemBase]
-
-    class Config:
-        from_attributes = True
-
-# --- ИНИЦИАЛИЗАЦИЯ И ЗАВИСИМОСТИ ---
+# --- ПРИЛОЖЕНИЕ ---
 app = FastAPI(title="ERP Order Management API")
-templates = Jinja2Templates(directory="templates")
-
-@app.get("/app", response_class=HTMLResponse)
-async def web_app(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
 
 app.add_middleware(
     CORSMiddleware,
@@ -161,56 +99,265 @@ async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
 
-def create_access_token(user_id: int):
-    expire = datetime.utcnow() + timedelta(days=30)
-    to_encode = {"sub": str(user_id), "exp": expire}
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> int:
-    try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        return int(payload.get("sub"))
-    except Exception:
-        raise HTTPException(status_code=401, detail="Неверный или просроченный токен")
-
 @app.on_event("startup")
 async def startup_event():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(UserModel).limit(1))
-        if not result.scalars().first():
-            test_user = UserModel(username="ivan", password_hash="1234", name="Иван Курьер", role=UserRole.COURIER)
-            db.add(test_user)
-            await db.commit()
 
-# --- ЭНДПОИНТЫ ---
-@app.post("/api/login")
-async def login(credentials: LoginSchema, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(UserModel).filter_by(username=credentials.username, password_hash=credentials.password)
-    )
-    user = result.scalars().first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
-    
-    token = create_access_token(user.id)
-    return {"access_token": token, "token_type": "bearer"}
+# --- ВСТРОЕННЫЙ HTML ИНТЕРФЕЙС (100% гарантия отображения) ---
+HTML_CONTENT = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Управление заказами (ТЗ)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 font-sans antialiased h-screen flex flex-col relative">
 
-@app.post("/api/users/fcm-token")
-async def update_fcm_token(
-    payload: FcmTokenSchema, 
-    user_id: int = Depends(get_current_user_id), 
-    db: AsyncSession = Depends(get_db)
-):
-    await db.execute(
-        update(UserModel).where(UserModel.id == user_id).values(fcm_token=payload.fcm_token)
-    )
-    await db.commit()
-    return {"status": "success"}
+    <header class="bg-blue-600 text-white p-4 shadow-md flex justify-between items-center z-10">
+        <h1 class="text-xl font-bold">Мои заказы</h1>
+        <button id="fabAdd" class="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1.5 rounded-lg font-medium text-sm flex items-center gap-1 transition shadow-sm">
+            + Новый заказ
+        </button>
+    </header>
 
-@app.post("/api/orders", response_model=OrderResponseSchema)
+    <main class="flex-1 overflow-y-auto p-4" id="mainContent">
+        <div class="flex items-center justify-center h-full">
+            <p class="text-gray-500 text-center">Загрузка данных...</p>
+        </div>
+    </main>
+
+    <div id="orderModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
+        <div class="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
+            <h2 class="text-lg font-bold mb-4 text-gray-800">Создание нового заказа</h2>
+            <form id="orderForm" class="space-y-4">
+                
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Предприятие</label>
+                        <select id="enterprise" class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-white">
+                            <option value="Завод №1 (Баку)">Завод №1 (Баку)</option>
+                            <option value="Завод №2 (Гянджа)">Завод №2 (Гянджа)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Приоритет</label>
+                        <select id="priority" class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-white">
+                            <option value="Средний">Средний</option>
+                            <option value="Высокий">Высокий</option>
+                            <option value="Низкий">Низкий</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Заказывающий отдел</label>
+                        <input type="text" id="reqDept" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Производство">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Исполняющий отдел</label>
+                        <input type="text" id="execDept" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Отдел закупок">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Плановая дата получения</label>
+                        <input type="date" id="plannedDate" class="w-full border border-gray-300 rounded-lg p-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Общий комментарий</label>
+                        <input type="text" id="orderComment" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Примечания...">
+                    </div>
+                </div>
+                
+                <hr class="my-3 border-gray-200">
+                <h3 class="font-bold text-sm text-gray-700">Позиция материала</h3>
+                
+                <div class="grid grid-cols-3 gap-2">
+                    <div class="col-span-1">
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Код материала</label>
+                        <input type="text" id="itemCode" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="MAT-001">
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Наименование</label>
+                        <input type="text" id="itemName" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Подшипник">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-3 gap-2">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Количество</label>
+                        <input type="number" id="itemQty" required min="1" class="w-full border border-gray-300 rounded-lg p-2 text-sm" value="1">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Ед. изм.</label>
+                        <input type="text" id="itemUnit" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" value="шт">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Аналог (Да/Нет)</label>
+                        <select id="allowAnalog" class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-white">
+                            <option value="true">Да</option>
+                            <option value="false">Нет</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Производитель</label>
+                        <input type="text" id="manufacturer" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="SKF / Bosch">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Поставщик (если есть)</label>
+                        <input type="text" id="supplier" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="ООО «Поставка»">
+                    </div>
+                </div>
+                
+                <div class="flex justify-end space-x-2 mt-5 pt-3 border-t border-gray-200">
+                    <button type="button" id="closeModalBtn" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Отмена</button>
+                    <button type="submit" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">Создать заказ</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const modal = document.getElementById('orderModal');
+        const fabAdd = document.getElementById('fabAdd');
+        const closeModalBtn = document.getElementById('closeModalBtn');
+        const orderForm = document.getElementById('orderForm');
+
+        fabAdd.addEventListener('click', () => modal.classList.remove('hidden'));
+        closeModalBtn.addEventListener('click', () => {
+            modal.classList.add('hidden');
+            orderForm.reset();
+        });
+
+        orderForm.addEventListener('submit', async (e) => {
+            e.preventDefault(); 
+            
+            const newOrder = {
+                id: Math.floor(Math.random() * 90000 + 10000).toString(), 
+                enterprise: document.getElementById('enterprise').value,
+                requesting_dept_id: document.getElementById('reqDept').value,
+                executing_dept_id: document.getElementById('execDept').value,
+                priority: document.getElementById('priority').value,
+                planned_date: document.getElementById('plannedDate').value || 'Не указана',
+                comment: document.getElementById('orderComment').value || '',
+                items: [
+                    {
+                        material_code: document.getElementById('itemCode').value,
+                        name: document.getElementById('itemName').value,
+                        unit: document.getElementById('itemUnit').value,
+                        requested_quantity: parseFloat(document.getElementById('itemQty').value),
+                        stock_balance: 0,
+                        allow_analog: document.getElementById('allowAnalog').value === 'true',
+                        manufacturer: document.getElementById('manufacturer').value || '-',
+                        supplier: document.getElementById('supplier').value || '-'
+                    }
+                ]
+            };
+
+            try {
+                const response = await fetch('/api/orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newOrder)
+                });
+
+                if (response.ok) {
+                    modal.classList.add('hidden'); 
+                    orderForm.reset();             
+                    loadApp();                     
+                } else {
+                    alert('Ошибка при создании заказа на сервере');
+                }
+            } catch (error) {
+                alert('Ошибка сети.');
+            }
+        });
+
+        async function loadApp() {
+            const main = document.getElementById('mainContent');
+            try {
+                const response = await fetch('/api/orders');
+                if (!response.ok) throw new Error('Ошибка сети');
+                
+                const orders = await response.json();
+                if (!orders || orders.length === 0) {
+                    main.innerHTML = '<div class="flex items-center justify-center h-full"><p class="text-gray-500">У вас пока нет заказов</p></div>';
+                    return;
+                }
+                
+                let html = '<div class="space-y-4 max-w-2xl mx-auto">';
+                orders.forEach(order => {
+                    let priorityColor = 'bg-gray-100 text-gray-700';
+                    if (order.priority === 'Высокий') priorityColor = 'bg-red-100 text-red-700';
+                    if (order.priority === 'Средний') priorityColor = 'bg-amber-100 text-amber-700';
+
+                    let itemsHtml = '';
+                    if (order.items && order.items.length > 0) {
+                        itemsHtml = '<div class="mt-3 pt-3 border-t border-gray-100 space-y-2">';
+                        order.items.forEach(item => {
+                            let analogText = item.allow_analog ? 'Аналог: Да' : 'Аналог: Нет';
+                            itemsHtml += `
+                                <div class="bg-gray-50 p-2.5 rounded-lg text-sm">
+                                    <div class="flex justify-between font-medium text-gray-900">
+                                        <span>${item.name} (${item.material_code})</span>
+                                        <span>${item.requested_quantity} ${item.unit}</span>
+                                    </div>
+                                    <div class="text-xs text-gray-500 mt-1 flex gap-3 flex-wrap">
+                                        <span>Производитель: <b>${item.manufacturer || '-'}</b></span>
+                                        <span>Поставщик: <b>${item.supplier || '-'}</b></span>
+                                        <span class="text-blue-600">${analogText}</span>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        itemsHtml += '</div>';
+                    }
+
+                    html += `
+                        <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                            <div class="flex justify-between items-start mb-2">
+                                <div>
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <h3 class="font-bold text-gray-900">Заказ #${order.id || '?'}</h3>
+                                        <span class="text-xs font-semibold px-2 py-0.5 rounded ${priorityColor}">Приоритет: ${order.priority || 'Средний'}</span>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mt-1">🏭 ${order.enterprise || 'Завод'} | ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
+                                </div>
+                                <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">${order.status || 'Черновик'}</span>
+                            </div>
+                            ${order.planned_date ? `<p class="text-xs text-gray-600 mb-1">📅 План получения: <b>${order.planned_date}</b></p>` : ''}
+                            ${order.comment ? `<p class="text-xs text-gray-500 italic mb-2">💬 "${order.comment}"</p>` : ''}
+                            ${itemsHtml}
+                        </div>
+                    `;
+                });
+                html += '</div>';
+                main.innerHTML = html;
+            } catch (error) {
+                main.innerHTML = '<div class="flex items-center justify-center h-full"><p class="text-red-500">Ошибка подключения к серверу</p></div>';
+            }
+        }
+
+        loadApp();
+    </script>
+</body>
+</html>
+"""
+
+@app.get("/app", response_class=HTMLResponse)
+async def web_app():
+    return HTMLResponse(content=HTML_CONTENT)
+
+# --- API ЭНДПОИНТЫ ---
+@app.post("/api/orders", response_model=dict)
 async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(OrderModel).filter_by(id=order_data.id))
     if result.scalars().first():
@@ -233,33 +380,37 @@ async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends
     await db.commit()
     await db.refresh(new_order, attribute_names=['items'])
     
-    return new_order
+    return {"status": "success", "id": new_order.id}
 
-@app.get("/api/orders", response_model=List[OrderResponseSchema])
+@app.get("/api/orders", response_model=List[dict])
 async def get_all_orders(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(OrderModel).options(selectinload(OrderModel.items)))
-    return result.scalars().all()
-
-@app.patch("/api/orders/{order_id}/assign", response_model=OrderResponseSchema)
-async def assign_employee(
-    order_id: str, 
-    payload: OrderAssignSchema, 
-    user_id: int = Depends(get_current_user_id), 
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(OrderModel).filter_by(id=order_id).options(selectinload(OrderModel.items)))
-    order = result.scalars().first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Заказ не найден")
-        
-    order.responsible_user_id = payload.employee_id
+    orders = result.scalars().all()
     
-    audit_log = StatusHistoryModel(
-        order_id=order.id, user_id=user_id, old_status=str(order.status), new_status=str(order.status),
-        comment=f"Заказ назначен на сотрудника ID:{payload.employee_id}"
-    )
-    db.add(audit_log)
-    await db.commit()
-    await db.refresh(order)
-    return order
-# овеверил
+    response_data = []
+    for order in orders:
+        response_data.append({
+            "id": order.id,
+            "created_at": order.created_at.isoformat(),
+            "status": order.status,
+            "enterprise": order.enterprise,
+            "requesting_dept_id": order.requesting_dept_id,
+            "executing_dept_id": order.executing_dept_id,
+            "priority": order.priority,
+            "planned_date": order.planned_date,
+            "comment": order.comment,
+            "items": [
+                {
+                    "material_code": item.material_code,
+                    "name": item.name,
+                    "unit": item.unit,
+                    "requested_quantity": item.requested_quantity,
+                    "stock_balance": item.stock_balance,
+                    "allow_analog": item.allow_analog,
+                    "manufacturer": item.manufacturer,
+                    "supplier": item.supplier,
+                    "comment": item.comment
+                } for item in order.items
+            ]
+        })
+    return response_data
