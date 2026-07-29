@@ -258,7 +258,7 @@ HTML_CONTENT = """
     </div>
 
     <script>
-        let ordersCache = []; // Глобальный кеш заказов
+        let ordersCache = [];
 
         const modal = document.getElementById('orderModal');
         const fabAdd = document.getElementById('fabAdd');
@@ -275,7 +275,20 @@ HTML_CONTENT = """
             document.getElementById('detailModal').classList.add('hidden');
         }
 
-        // Отправка формы нового заказа
+        // Функция скачивания ТЗ
+        function downloadTechSpec(orderId, fileName) {
+            const content = `ТЕХНИЧЕСКОЕ ЗАДАНИЕ\\nСистема управления заказами материалов\\n----------------------------------------\\nЗаказ №: ${orderId}\\nПрикрепленный файл: ${fileName}\\nДата скачивания: ${new Date().toLocaleString()}\\nСтатус: Успешно выгружено из системы.`;
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
         orderForm.addEventListener('submit', async (e) => {
             e.preventDefault(); 
             const fileInput = document.getElementById('techSpecFile');
@@ -324,7 +337,6 @@ HTML_CONTENT = """
             }
         });
 
-        // Загрузка и рендеринг списка заказов
         async function loadApp() {
             const main = document.getElementById('mainContent');
             try {
@@ -332,7 +344,7 @@ HTML_CONTENT = """
                 if (!response.ok) throw new Error('Ошибка сети');
                 
                 const orders = await response.json();
-                ordersCache = orders; // Сохраняем в кеш
+                ordersCache = orders;
                 
                 if (!orders || orders.length === 0) {
                     main.innerHTML = '<div class="flex items-center justify-center h-full"><p class="text-gray-500">У вас пока нет заказов</p></div>';
@@ -367,7 +379,6 @@ HTML_CONTENT = """
                         itemsHtml += '</div>';
                     }
 
-                    // Передаем только ID заказа по клику
                     html += `
                         <div onclick="openDetail('${order.id}')" class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-blue-400 cursor-pointer transition">
                             <div class="flex justify-between items-start mb-2">
@@ -399,7 +410,6 @@ HTML_CONTENT = """
             }
         }
 
-        // Открытие модального окна по ID заказа из кеша
         function openDetail(orderId) {
             const order = ordersCache.find(o => o.id === orderId);
             if (!order) return;
@@ -422,7 +432,7 @@ HTML_CONTENT = """
             }
 
             let downloadBtnHtml = order.tech_spec_file && order.tech_spec_file !== '-' && order.tech_spec_file !== 'Не прикреплен'
-                ? `<a href="#" onclick="alert('Скачивание файла: ${order.tech_spec_file}'); return false;" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 transition">📥 Скачать ТЗ (${order.tech_spec_file})</a>`
+                ? `<button onclick="downloadTechSpec('${order.id}', '${order.tech_spec_file}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 transition cursor-pointer">📥 Скачать ТЗ (${order.tech_spec_file})</button>`
                 : '<span class="text-gray-400 text-xs">Файл ТЗ не прикреплен</span>';
 
             document.getElementById('detModalBody').innerHTML = `
