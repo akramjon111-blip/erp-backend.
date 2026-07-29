@@ -32,12 +32,13 @@ class OrderModel(Base):
     __tablename__ = "orders"
     id = Column(String, primary_key=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    approved_at = Column(DateTime, nullable=True) # НОВОЕ ПОЛЕ: Дата утверждения
     status = Column(String, default="Черновик")
     enterprise = Column(String, nullable=True)
     requesting_dept_id = Column(String)
     executing_dept_id = Column(String)
     priority = Column(String, default="Средний")
-    planned_date = Column(String, nullable=True)
+    planned_date = Column(String, nullable=True) # В UI теперь "Необходимая дата"
     tech_spec_file = Column(String, nullable=True)
     comment = Column(String, nullable=True)
     responsible_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -190,7 +191,7 @@ HTML_CONTENT = """
                 </div>
                 <div class="grid grid-cols-2 gap-3">
                     <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Плановая дата получения</label>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Необходимая дата</label>
                         <input type="date" id="plannedDate" class="w-full border border-gray-300 rounded-lg p-2 text-sm">
                     </div>
                     <div>
@@ -214,10 +215,7 @@ HTML_CONTENT = """
                     <button type="button" onclick="addItemRow()" class="bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1 rounded-lg text-xs font-bold transition shadow-sm">+ Добавить позицию</button>
                 </div>
                 
-                <!-- Контейнер для динамических строк позиций -->
-                <div id="itemsContainer" class="space-y-3">
-                    <!-- JS вставляет блоки сюда -->
-                </div>
+                <div id="itemsContainer" class="space-y-3"></div>
                 
                 <div class="flex justify-end space-x-2 mt-5 pt-3 border-t border-gray-200">
                     <button type="button" id="closeModalBtn" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Отмена</button>
@@ -578,7 +576,7 @@ HTML_CONTENT = """
                     return;
                 }
                 
-                let html = '<div class="space-y-4 max-w-2xl mx-auto">';
+                let html = '<div class="space-y-4 max-w-2xl mx-auto pb-10">';
                 orders.forEach(order => {
                     let priorityColor = 'bg-gray-100 text-gray-700';
                     if (order.priority === 'Высокий') priorityColor = 'bg-red-100 text-red-700';
@@ -603,12 +601,16 @@ HTML_CONTENT = """
                                         <span>${index + 1}. ${item.name} <span class="text-xs text-gray-500 font-normal">(${item.material_code})</span></span>
                                         <span>${item.requested_quantity} ${item.unit}</span>
                                     </div>
-                                    ${item.specification && item.specification !== '-' ? `<div class="text-xs text-blue-700 mt-1 bg-blue-50 p-1.5 rounded whitespace-pre-wrap">Спец: ${item.specification}</div>` : ''}
+                                    ${item.specification && item.specification !== '-' ? `<div class="text-xs text-blue-700 mt-1 bg-blue-50 p-1.5 rounded whitespace-pre-wrap font-mono">${item.specification}</div>` : ''}
                                 </div>
                             `;
                         });
                         itemsHtml += '</div>';
                     }
+
+                    // Даты для карточки
+                    let createdStr = order.created_at ? new Date(order.created_at).toLocaleDateString() : '';
+                    let approvedStr = order.approved_at ? `<span class="ml-2 text-purple-600">✓ Утв: ${new Date(order.approved_at).toLocaleDateString()}</span>` : '';
 
                     html += `
                         <div onclick="openDetail('${order.id}')" class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-blue-400 cursor-pointer transition">
@@ -622,8 +624,9 @@ HTML_CONTENT = """
                                 </div>
                                 <span class="text-xs font-bold px-2.5 py-1 rounded-full ${statusColor}">${order.status}</span>
                             </div>
-                            <div class="text-xs text-gray-600 flex gap-4 flex-wrap mb-1">
-                                ${order.planned_date ? `<span>📅 План: <b>${order.planned_date}</b></span>` : ''}
+                            <div class="text-xs text-gray-600 flex gap-4 flex-wrap mb-2">
+                                ${order.planned_date ? `<span>📅 Необходимая дата: <b class="text-red-600">${order.planned_date}</b></span>` : ''}
+                                <span>🕒 Создан: ${createdStr} ${approvedStr}</span>
                             </div>
                             ${order.comment ? `<div class="text-xs text-gray-500 italic mb-2 whitespace-pre-wrap">💬 "${order.comment}"</div>` : ''}
                             ${itemsHtml}
@@ -653,6 +656,9 @@ HTML_CONTENT = """
             if (order.status === 'На складе') statusBadge = `<span class="px-2 py-0.5 bg-orange-100 text-orange-700 rounded font-semibold">${order.status}</span>`;
             if (order.status === 'Выполнен') statusBadge = `<span class="px-2 py-0.5 bg-green-100 text-green-700 rounded font-semibold">${order.status}</span>`;
 
+            let createdStr = order.created_at ? new Date(order.created_at).toLocaleString() : '-';
+            let approvedStr = order.approved_at ? new Date(order.approved_at).toLocaleString() : '<span class="text-gray-400 italic">Еще не утвержден</span>';
+
             let itemsDetails = '';
             if (order.items) {
                 order.items.forEach((item, idx) => {
@@ -664,7 +670,7 @@ HTML_CONTENT = """
                             <div><b>Производитель:</b> ${item.manufacturer || '-'}</div>
                             <div><b>Поставщик (ожидаемый):</b> ${item.supplier || '-'}</div>
                             <div><b>Допуск аналога:</b> ${item.allow_analog ? 'Да' : 'Нет'}</div>
-                            ${item.specification && item.specification !== '-' ? `<div class="mt-2 text-blue-800 bg-blue-100 p-2 rounded text-sm whitespace-pre-wrap"><b>Спецификация:</b><br>${item.specification}</div>` : ''}
+                            ${item.specification && item.specification !== '-' ? `<div class="mt-2 text-blue-800 bg-blue-100 p-2 rounded text-sm whitespace-pre-wrap font-mono"><b>Спецификация:</b><br>${item.specification}</div>` : ''}
                         </div>
                     `;
                 });
@@ -696,16 +702,20 @@ HTML_CONTENT = """
                 <div class="space-y-2">
                     <div class="flex justify-between items-center">
                         <p><b>Статус:</b> ${statusBadge}</p>
-                        <p class="text-xs text-gray-500">Дата: ${new Date(order.created_at).toLocaleDateString()}</p>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 text-xs bg-gray-50 p-2 rounded border border-gray-100">
+                        <div><b>Дата создания:</b><br>${createdStr}</div>
+                        <div><b>Дата утверждения:</b><br>${approvedStr}</div>
                     </div>
                     <p><b>Предприятие:</b> ${order.enterprise || '-'}</p>
                     <p><b>Направление:</b> ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
                     <p><b>Приоритет:</b> ${order.priority}</p>
+                    <p><b>Необходимая дата:</b> <span class="text-red-600 font-bold">${order.planned_date || 'Не указана'}</span></p>
                     <div class="pt-1">
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание:</label>
                         ${downloadBtnHtml}
                     </div>
-                    ${order.comment ? `<div class="mt-2 text-red-600"><b>Комментарий/История:</b><div class="whitespace-pre-wrap text-sm">${order.comment}</div></div>` : ''}
+                    ${order.comment ? `<div class="mt-2 text-red-600"><b>Комментарий/История:</b><div class="whitespace-pre-wrap text-sm border-l-2 border-red-400 pl-2 mt-1 bg-red-50 py-1 pr-1">${order.comment}</div></div>` : ''}
                     
                     <hr class="my-2">
                     <h4 class="font-bold text-gray-800">Запрошенные позиции:</h4>
@@ -742,7 +752,7 @@ HTML_CONTENT = """
 
             document.getElementById('detModalFooter').innerHTML = `
                 ${extraRejectHtml}
-                <div class="flex justify-between w-full">
+                <div class="flex justify-between w-full items-end">
                     <div>${leftActionButtons}</div>
                     <div class="flex gap-2">${rightActionButtons}</div>
                 </div>
@@ -819,11 +829,14 @@ async def update_order_status(order_id: str, payload: OrderStatusUpdateSchema, d
     if not order:
         raise HTTPException(status_code=404, detail="Заказ не найден")
     
+    if payload.status == 'Принят в работу' and order.status != 'Принят в работу':
+        order.approved_at = datetime.utcnow()
+
     order.status = payload.status
     if payload.reject_comment:
         existing_comment = order.comment if order.comment else ""
-        separator = " | " if existing_comment else ""
-        order.comment = f"{existing_comment}{separator}[ОТКАЗ: {payload.reject_comment}]"
+        separator = "\n\n" if existing_comment else ""
+        order.comment = f"{existing_comment}{separator}[ОТКАЗ]: {payload.reject_comment}"
 
     if payload.supplier_name: order.supplier_name = payload.supplier_name
     if payload.contract_number: order.contract_number = payload.contract_number
@@ -846,7 +859,8 @@ async def get_all_orders(db: AsyncSession = Depends(get_db)):
     for order in orders:
         response_data.append({
             "id": order.id,
-            "created_at": order.created_at.isoformat(),
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "approved_at": order.approved_at.isoformat() if order.approved_at else None,
             "status": order.status,
             "enterprise": order.enterprise,
             "requesting_dept_id": order.requesting_dept_id,
