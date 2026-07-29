@@ -66,7 +66,7 @@ class OrderItemModel(Base):
     allow_analog = Column(Boolean, default=True)
     manufacturer = Column(String, nullable=True)
     supplier = Column(String, nullable=True)
-    specification = Column(String, nullable=True) # Спецификация перенесена сюда
+    specification = Column(String, nullable=True) 
     comment = Column(String, nullable=True)
     order = relationship("OrderModel", back_populates="items")
 
@@ -83,7 +83,7 @@ class OrderItemBase(BaseModel):
     allow_analog: bool = True
     manufacturer: Optional[str] = "-"
     supplier: Optional[str] = "-"
-    specification: Optional[str] = "-" # Спецификация перенесена сюда
+    specification: Optional[str] = "-" 
     comment: Optional[str] = None
 
 class OrderCreateSchema(BaseModel):
@@ -194,17 +194,17 @@ HTML_CONTENT = """
                         <input type="date" id="plannedDate" class="w-full border border-gray-300 rounded-lg p-2 text-sm">
                     </div>
                     <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Общий комментарий</label>
-                        <input type="text" id="orderComment" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Примечания...">
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание (ТЗ)</label>
+                        <div id="currentFileBox" class="hidden mb-2 bg-blue-50 text-blue-700 text-xs px-2 py-1.5 rounded flex justify-between items-center border border-blue-100">
+                            <span id="currentFileName" class="truncate max-w-[120px] font-medium">Файл.docx</span>
+                            <button type="button" onclick="removeCurrentFile()" class="text-red-500 hover:text-red-700 font-bold ml-2" title="Удалить прикрепленный файл">✕ Удалить</button>
+                        </div>
+                        <input type="file" id="techSpecFile" class="w-full border border-gray-200 rounded-lg p-1 text-xs bg-white text-gray-500">
                     </div>
                 </div>
-                <div class="mt-2">
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание (ТЗ)</label>
-                    <div id="currentFileBox" class="hidden mb-2 bg-blue-50 text-blue-700 text-xs px-2 py-1.5 rounded flex justify-between items-center border border-blue-100">
-                        <span id="currentFileName" class="truncate max-w-[120px] font-medium">Файл.docx</span>
-                        <button type="button" onclick="removeCurrentFile()" class="text-red-500 hover:text-red-700 font-bold ml-2" title="Удалить прикрепленный файл">✕ Удалить</button>
-                    </div>
-                    <input type="file" id="techSpecFile" class="w-full border border-gray-200 rounded-lg p-1 text-xs bg-white text-gray-500">
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Общий комментарий</label>
+                    <textarea id="orderComment" rows="2" class="w-full border border-gray-300 rounded-lg p-2 text-sm resize-y" placeholder="Примечания (можно с новой строки)..."></textarea>
                 </div>
                 
                 <hr class="my-3 border-gray-200">
@@ -254,7 +254,6 @@ HTML_CONTENT = """
         const orderForm = document.getElementById('orderForm');
         const itemsContainer = document.getElementById('itemsContainer');
 
-        // ФУНКЦИЯ ДОБАВЛЕНИЯ НОВОЙ ПОЗИЦИИ (ТЕПЕРЬ СО СПЕЦИФИКАЦИЕЙ)
         function addItemRow(itemData = null) {
             const row = document.createElement('div');
             row.className = 'item-row bg-gray-50 p-3 rounded-lg border border-gray-200 relative';
@@ -290,11 +289,11 @@ HTML_CONTENT = """
                         </select>
                     </div>
                 </div>
-                <div class="grid grid-cols-3 gap-2">
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Спецификация</label>
-                        <input type="text" class="i-spec w-full border border-gray-300 rounded p-1.5 text-xs bg-white" placeholder="№ спец..." value="${itemData ? (itemData.specification || '') : ''}">
-                    </div>
+                <div class="mb-2">
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Спецификация (характеристики)</label>
+                    <textarea class="i-spec w-full border border-gray-300 rounded p-1.5 text-xs bg-white resize-y" rows="2" placeholder="Дополнительные характеристики с новой строки...">${itemData ? (itemData.specification || '') : ''}</textarea>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Производитель</label>
                         <input type="text" class="i-manuf w-full border border-gray-300 rounded p-1.5 text-xs bg-white" placeholder="Бренд" value="${itemData ? (itemData.manufacturer || '') : ''}">
@@ -477,7 +476,6 @@ HTML_CONTENT = """
             changeStatus(orderId, 'Черновик', comment);
         }
 
-        // --- ФОРМА ПОСТАВЩИКА ---
         function showSupplierForm(orderId, maxQty) {
             const footer = document.getElementById('detModalFooter');
             footer.innerHTML = `
@@ -598,14 +596,14 @@ HTML_CONTENT = """
                         itemsHtml = '<div class="mt-3 pt-3 border-t border-gray-100 space-y-2">';
                         order.items.forEach((item, index) => {
                             let analogText = item.allow_analog ? 'Аналог: Да' : 'Аналог: Нет';
-                            let specText = item.specification && item.specification !== '-' ? `<span class="ml-3 text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">Спец.: ${item.specification}</span>` : '';
                             
                             itemsHtml += `
                                 <div class="bg-gray-50 p-2.5 rounded-lg text-sm border-l-4 border-blue-400">
                                     <div class="flex justify-between font-medium text-gray-900">
-                                        <span>${index + 1}. ${item.name} <span class="text-xs text-gray-500 font-normal">(${item.material_code})</span>${specText}</span>
+                                        <span>${index + 1}. ${item.name} <span class="text-xs text-gray-500 font-normal">(${item.material_code})</span></span>
                                         <span>${item.requested_quantity} ${item.unit}</span>
                                     </div>
+                                    ${item.specification && item.specification !== '-' ? `<div class="text-xs text-blue-700 mt-1 bg-blue-50 p-1.5 rounded whitespace-pre-wrap">Спец: ${item.specification}</div>` : ''}
                                 </div>
                             `;
                         });
@@ -627,7 +625,7 @@ HTML_CONTENT = """
                             <div class="text-xs text-gray-600 flex gap-4 flex-wrap mb-1">
                                 ${order.planned_date ? `<span>📅 План: <b>${order.planned_date}</b></span>` : ''}
                             </div>
-                            ${order.comment ? `<p class="text-xs text-gray-500 italic mb-2">💬 "${order.comment}"</p>` : ''}
+                            ${order.comment ? `<div class="text-xs text-gray-500 italic mb-2 whitespace-pre-wrap">💬 "${order.comment}"</div>` : ''}
                             ${itemsHtml}
                         </div>
                     `;
@@ -663,10 +661,10 @@ HTML_CONTENT = """
                             <span class="absolute top-2 right-2 text-xs font-bold text-gray-400">Позиция ${idx + 1}</span>
                             <div><b>Наименование:</b> ${item.name} (${item.material_code})</div>
                             <div><b>Количество:</b> ${item.requested_quantity} ${item.unit}</div>
-                            <div><b>Спецификация:</b> <span class="text-blue-700 font-semibold">${item.specification || '-'}</span></div>
                             <div><b>Производитель:</b> ${item.manufacturer || '-'}</div>
                             <div><b>Поставщик (ожидаемый):</b> ${item.supplier || '-'}</div>
                             <div><b>Допуск аналога:</b> ${item.allow_analog ? 'Да' : 'Нет'}</div>
+                            ${item.specification && item.specification !== '-' ? `<div class="mt-2 text-blue-800 bg-blue-100 p-2 rounded text-sm whitespace-pre-wrap"><b>Спецификация:</b><br>${item.specification}</div>` : ''}
                         </div>
                     `;
                 });
@@ -707,7 +705,7 @@ HTML_CONTENT = """
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание:</label>
                         ${downloadBtnHtml}
                     </div>
-                    ${order.comment ? `<p class="mt-2 text-red-600"><b>Комментарий/История:</b> ${order.comment}</p>` : ''}
+                    ${order.comment ? `<div class="mt-2 text-red-600"><b>Комментарий/История:</b><div class="whitespace-pre-wrap text-sm">${order.comment}</div></div>` : ''}
                     
                     <hr class="my-2">
                     <h4 class="font-bold text-gray-800">Запрошенные позиции:</h4>
@@ -729,7 +727,7 @@ HTML_CONTENT = """
                 extraRejectHtml = `
                     <div class="w-full bg-red-50 p-3 rounded-lg border border-red-200 mb-2">
                         <label class="block text-xs font-semibold text-red-700 mb-1">Причина отказа (обязательно):</label>
-                        <input type="text" id="rejectComment_${order.id}" placeholder="Опишите причину отклонения..." class="w-full border border-red-300 rounded-lg p-2 text-sm outline-none focus:ring-1 focus:ring-red-500 bg-white text-gray-800">
+                        <textarea id="rejectComment_${order.id}" rows="2" placeholder="Опишите причину отклонения..." class="w-full border border-red-300 rounded-lg p-2 text-sm outline-none focus:ring-1 focus:ring-red-500 bg-white text-gray-800 resize-y"></textarea>
                     </div>
                 `;
                 rightActionButtons += `<button onclick="rejectOrder('${order.id}')" class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 shadow">❌ Отказать</button>`;
