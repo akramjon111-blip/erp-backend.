@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+ffrom fastapi import FastAPI, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -42,6 +42,17 @@ class OrderModel(Base):
     tech_spec_file = Column(String, nullable=True)
     comment = Column(String, nullable=True)
     responsible_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    
+    # НОВЫЕ ПОЛЯ ДЛЯ ДАННЫХ ОТ ПОСТАВЩИКА
+    supplier_name = Column(String, nullable=True)
+    contract_number = Column(String, nullable=True)
+    contract_date = Column(String, nullable=True)
+    currency = Column(String, nullable=True)
+    incoterms = Column(String, nullable=True)
+    ordered_quantity = Column(Float, nullable=True)
+    unit_price = Column(Float, nullable=True)
+    total_amount = Column(Float, nullable=True)
+    
     items = relationship("OrderItemModel", back_populates="order", cascade="all, delete-orphan")
 
 class OrderItemModel(Base):
@@ -86,10 +97,18 @@ class OrderCreateSchema(BaseModel):
     comment: Optional[str] = None
     items: List[OrderItemBase]
 
-# Добавлено поле для комментария отказа
 class OrderStatusUpdateSchema(BaseModel):
     status: str
     reject_comment: Optional[str] = None
+    # Новые поля для формы поставщика
+    supplier_name: Optional[str] = None
+    contract_number: Optional[str] = None
+    contract_date: Optional[str] = None
+    currency: Optional[str] = None
+    incoterms: Optional[str] = None
+    ordered_quantity: Optional[float] = None
+    unit_price: Optional[float] = None
+    total_amount: Optional[float] = None
 
 # --- ПРИЛОЖЕНИЕ ---
 app = FastAPI(title="ERP Order Management API")
@@ -143,7 +162,6 @@ HTML_CONTENT = """
         <div class="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
             <h2 class="text-lg font-bold mb-4 text-gray-800">Создание нового заказа</h2>
             <form id="orderForm" class="space-y-4">
-                
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Предприятие</label>
@@ -161,7 +179,6 @@ HTML_CONTENT = """
                         </select>
                     </div>
                 </div>
-
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Заказывающий отдел</label>
@@ -172,7 +189,6 @@ HTML_CONTENT = """
                         <input type="text" id="execDept" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Отдел закупок">
                     </div>
                 </div>
-
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Плановая дата получения</label>
@@ -183,7 +199,6 @@ HTML_CONTENT = """
                         <input type="text" id="specification" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="№ спецификации">
                     </div>
                 </div>
-
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание (ТЗ)</label>
@@ -194,10 +209,8 @@ HTML_CONTENT = """
                         <input type="text" id="orderComment" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Примечания...">
                     </div>
                 </div>
-                
                 <hr class="my-3 border-gray-200">
                 <h3 class="font-bold text-sm text-gray-700">Позиция материала</h3>
-                
                 <div class="grid grid-cols-3 gap-2">
                     <div class="col-span-1">
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Код материала</label>
@@ -208,7 +221,6 @@ HTML_CONTENT = """
                         <input type="text" id="itemName" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Подшипник">
                     </div>
                 </div>
-
                 <div class="grid grid-cols-3 gap-2">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Количество</label>
@@ -226,7 +238,6 @@ HTML_CONTENT = """
                         </select>
                     </div>
                 </div>
-
                 <div class="grid grid-cols-2 gap-2">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Производитель</label>
@@ -237,7 +248,6 @@ HTML_CONTENT = """
                         <input type="text" id="supplier" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="ООО «Поставка»">
                     </div>
                 </div>
-                
                 <div class="flex justify-end space-x-2 mt-5 pt-3 border-t border-gray-200">
                     <button type="button" id="closeModalBtn" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Отмена</button>
                     <button type="submit" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">Создать заказ</button>
@@ -246,9 +256,9 @@ HTML_CONTENT = """
         </div>
     </div>
 
-    <!-- Модальное окно детализации заказа (обновленный футер) -->
+    <!-- Модальное окно детализации заказа -->
     <div id="detailModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
-        <div class="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div class="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl max-h-[95vh] overflow-y-auto">
             <div class="flex justify-between items-center mb-4 border-b pb-2">
                 <h2 id="detModalTitle" class="text-lg font-bold text-gray-800">Детали заказа</h2>
                 <button onclick="closeDetailModal()" class="text-gray-400 hover:text-gray-600 font-bold text-lg">&times;</button>
@@ -257,7 +267,7 @@ HTML_CONTENT = """
                 <!-- Контент детализации -->
             </div>
             <div id="detModalFooter" class="mt-6 pt-3 border-t flex flex-col gap-3">
-                <!-- Кнопки статуса и ячейка отказа добавятся сюда JS-ом -->
+                <!-- Кнопки статуса и формы добавятся сюда JS-ом -->
             </div>
         </div>
     </div>
@@ -280,7 +290,6 @@ HTML_CONTENT = """
             document.getElementById('detailModal').classList.add('hidden');
         }
 
-        // Функция скачивания ТЗ
         function downloadTechSpec(orderId, fileName) {
             const content = `ТЕХНИЧЕСКОЕ ЗАДАНИЕ\\nСистема управления заказами материалов\\n----------------------------------------\\nЗаказ №: ${orderId}\\nПрикрепленный файл: ${fileName}\\nДата скачивания: ${new Date().toLocaleString()}\\nСтатус: Успешно выгружено из системы.`;
             const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -294,17 +303,17 @@ HTML_CONTENT = """
             URL.revokeObjectURL(url);
         }
 
-        // Отправка изменения статуса (теперь с возможностью комментария при отказе)
-        async function changeStatus(orderId, newStatus, rejectComment = null) {
+        async function changeStatus(orderId, newStatus, rejectComment = null, supplierData = {}) {
             try {
+                const payload = { status: newStatus, reject_comment: rejectComment, ...supplierData };
                 const response = await fetch(`/api/orders/${orderId}/status`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ status: newStatus, reject_comment: rejectComment })
+                    body: JSON.stringify(payload)
                 });
                 if (response.ok) {
                     closeDetailModal();
-                    loadApp(); // Перезагружаем список
+                    loadApp();
                 } else {
                     alert('Ошибка при смене статуса');
                 }
@@ -313,26 +322,117 @@ HTML_CONTENT = """
             }
         }
 
-        // Функция-обработчик для кнопки "Отказать"
         function rejectOrder(orderId) {
             const commentInput = document.getElementById('rejectComment_' + orderId);
             const comment = commentInput ? commentInput.value.trim() : '';
-            
             if (!comment) {
-                alert('Пожалуйста, обязательно укажите причину отказа в текстовом поле!');
+                alert('Пожалуйста, обязательно укажите причину отказа!');
                 commentInput.focus();
                 return;
             }
-            
-            // Если комментарий есть, откатываем на "Черновик"
             changeStatus(orderId, 'Черновик', comment);
         }
+
+        // --- ЛОГИКА ФОРМЫ ЗАКУПКИ ---
+        function showSupplierForm(orderId, maxQty) {
+            const footer = document.getElementById('detModalFooter');
+            footer.innerHTML = `
+                <div class="w-full bg-indigo-50 p-4 rounded-lg border border-indigo-200 shadow-inner">
+                    <h4 class="font-bold text-indigo-800 mb-3 border-b border-indigo-200 pb-2">Оформление заказа у поставщика</h4>
+                    <div class="grid grid-cols-2 gap-3 mb-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Поставщик</label>
+                            <input type="text" id="supName" class="w-full border border-gray-300 rounded p-1.5 text-sm" placeholder="Название компании" required>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Номер договора</label>
+                            <input type="text" id="supContract" class="w-full border border-gray-300 rounded p-1.5 text-sm" placeholder="№..." required>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Дата договора</label>
+                            <input type="date" id="supDate" class="w-full border border-gray-300 rounded p-1.5 text-sm" required>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Валюта</label>
+                            <select id="supCurrency" class="w-full border border-gray-300 rounded p-1.5 text-sm bg-white">
+                                <option value="AZN">AZN (Манат)</option>
+                                <option value="USD">USD (Доллар)</option>
+                                <option value="EUR">EUR (Евро)</option>
+                                <option value="RUB">RUB (Рубль)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Инкотермс</label>
+                            <select id="supInco" class="w-full border border-gray-300 rounded p-1.5 text-sm bg-white">
+                                <option>EXW</option>
+                                <option>FCA</option>
+                                <option>CPT</option>
+                                <option>CIP</option>
+                                <option>DAP</option>
+                                <option>DDP</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Кол-во (не больше ${maxQty})</label>
+                            <input type="number" id="supQty" class="w-full border border-gray-300 rounded p-1.5 text-sm font-bold text-blue-700" value="${maxQty}" oninput="calcSum(${maxQty})" required>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Цена за единицу</label>
+                            <input type="number" id="supPrice" step="0.01" class="w-full border border-gray-300 rounded p-1.5 text-sm" placeholder="0.00" oninput="calcSum(${maxQty})" required>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Итоговая сумма</label>
+                            <input type="text" id="supTotal" class="w-full border border-indigo-200 bg-indigo-100 rounded p-1.5 text-sm font-bold text-indigo-900 outline-none" readonly value="0.00">
+                        </div>
+                    </div>
+                    <div class="flex justify-end gap-2">
+                        <button onclick="openDetail('${orderId}')" class="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">Отмена</button>
+                        <button onclick="submitSupplierOrder('${orderId}')" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow">Подтвердить закупку</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function calcSum(maxQty) {
+            const qtyInput = document.getElementById('supQty');
+            let qty = parseFloat(qtyInput.value) || 0;
+            
+            // Защита: количество не может превышать заказанное
+            if (qty > maxQty) {
+                alert('Ошибка: Количество не может превышать исходный запрос (' + maxQty + ')!');
+                qtyInput.value = maxQty;
+                qty = maxQty;
+            }
+            
+            let price = parseFloat(document.getElementById('supPrice').value) || 0;
+            document.getElementById('supTotal').value = (qty * price).toFixed(2);
+        }
+
+        function submitSupplierOrder(orderId) {
+            const supplierData = {
+                supplier_name: document.getElementById('supName').value.trim(),
+                contract_number: document.getElementById('supContract').value.trim(),
+                contract_date: document.getElementById('supDate').value,
+                currency: document.getElementById('supCurrency').value,
+                incoterms: document.getElementById('supInco').value,
+                ordered_quantity: parseFloat(document.getElementById('supQty').value) || 0,
+                unit_price: parseFloat(document.getElementById('supPrice').value) || 0,
+                total_amount: parseFloat(document.getElementById('supTotal').value) || 0
+            };
+            
+            if (!supplierData.supplier_name || !supplierData.contract_number || !supplierData.contract_date || !supplierData.unit_price) {
+                alert('Пожалуйста, заполните все обязательные поля поставщика!');
+                return;
+            }
+            
+            changeStatus(orderId, 'Заказан поставщику', null, supplierData);
+        }
+        // ------------------------------------
 
         orderForm.addEventListener('submit', async (e) => {
             e.preventDefault(); 
             const fileInput = document.getElementById('techSpecFile');
             const fileName = fileInput.files.length > 0 ? fileInput.files[0].name : 'Не прикреплен';
-
             const newOrder = {
                 id: Math.floor(Math.random() * 90000 + 10000).toString(), 
                 enterprise: document.getElementById('enterprise').value,
@@ -356,23 +456,11 @@ HTML_CONTENT = """
                     }
                 ]
             };
-
             try {
-                const response = await fetch('/api/orders', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(newOrder)
-                });
-                if (response.ok) {
-                    modal.classList.add('hidden'); 
-                    orderForm.reset();             
-                    loadApp();                     
-                } else {
-                    alert('Ошибка при создании заказа на сервере');
-                }
-            } catch (error) {
-                alert('Ошибка сети.');
-            }
+                const response = await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newOrder) });
+                if (response.ok) { modal.classList.add('hidden'); orderForm.reset(); loadApp(); } 
+                else { alert('Ошибка сервера'); }
+            } catch (error) { alert('Ошибка сети'); }
         });
 
         async function loadApp() {
@@ -380,7 +468,6 @@ HTML_CONTENT = """
             try {
                 const response = await fetch('/api/orders');
                 if (!response.ok) throw new Error('Ошибка сети');
-                
                 const orders = await response.json();
                 ordersCache = orders;
                 
@@ -413,11 +500,6 @@ HTML_CONTENT = """
                                         <span>${item.name} (${item.material_code})</span>
                                         <span>${item.requested_quantity} ${item.unit}</span>
                                     </div>
-                                    <div class="text-xs text-gray-500 mt-1 flex gap-3 flex-wrap">
-                                        <span>Производитель: <b>${item.manufacturer || '-'}</b></span>
-                                        <span>Поставщик: <b>${item.supplier || '-'}</b></span>
-                                        <span class="text-blue-600">${analogText}</span>
-                                    </div>
                                 </div>
                             `;
                         });
@@ -436,13 +518,10 @@ HTML_CONTENT = """
                                 </div>
                                 <span class="text-xs font-bold px-2.5 py-1 rounded-full ${statusColor}">${order.status}</span>
                             </div>
-                            
-                            <div class="text-xs text-gray-600 mb-1 flex gap-4 flex-wrap">
+                            <div class="text-xs text-gray-600 flex gap-4 flex-wrap mb-1">
                                 ${order.planned_date ? `<span>📅 План: <b>${order.planned_date}</b></span>` : ''}
-                                ${order.specification ? `<span>📋 Спецификация: <b>${order.specification}</b></span>` : ''}
-                                ${order.tech_spec_file ? `<span>📎 ТЗ: <b class="text-blue-600">${order.tech_spec_file}</b></span>` : ''}
+                                ${order.specification && order.specification !== '-' ? `<span>📋 Спец.: <b>${order.specification}</b></span>` : ''}
                             </div>
-                            
                             ${order.comment ? `<p class="text-xs text-gray-500 italic mb-2">💬 "${order.comment}"</p>` : ''}
                             ${itemsHtml}
                         </div>
@@ -458,6 +537,12 @@ HTML_CONTENT = """
         function openDetail(orderId) {
             const order = ordersCache.find(o => o.id === orderId);
             if (!order) return;
+
+            // Вычисляем общее количество запрашиваемого материала для лимита
+            let totalRequestedQty = 0;
+            if (order.items) {
+                order.items.forEach(item => totalRequestedQty += item.requested_quantity);
+            }
 
             document.getElementById('detModalTitle').innerText = `Детали заказа #${order.id}`;
             
@@ -476,7 +561,7 @@ HTML_CONTENT = """
                             <div><b>Наименование:</b> ${item.name} (${item.material_code})</div>
                             <div><b>Количество:</b> ${item.requested_quantity} ${item.unit}</div>
                             <div><b>Производитель:</b> ${item.manufacturer || '-'}</div>
-                            <div><b>Поставщик:</b> ${item.supplier || '-'}</div>
+                            <div><b>Поставщик (ожидаемый):</b> ${item.supplier || '-'}</div>
                             <div><b>Допуск аналога:</b> ${item.allow_analog ? 'Да' : 'Нет'}</div>
                         </div>
                     `;
@@ -487,53 +572,74 @@ HTML_CONTENT = """
                 ? `<button onclick="downloadTechSpec('${order.id}', '${order.tech_spec_file}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 transition cursor-pointer">📥 Скачать ТЗ (${order.tech_spec_file})</button>`
                 : '<span class="text-gray-400 text-xs">Файл ТЗ не прикреплен</span>';
 
+            // Блок информации от поставщика (если заказ уже оформлен)
+            let supplierInfoHtml = '';
+            if (order.status === 'Заказан поставщику' || order.status === 'На складе' || order.status === 'Выполнен') {
+                if (order.supplier_name) {
+                    supplierInfoHtml = `
+                        <hr class="my-3">
+                        <h4 class="font-bold text-indigo-800">Данные закупки:</h4>
+                        <div class="bg-indigo-50 p-3 rounded-lg border border-indigo-200 text-sm space-y-1 mt-2">
+                            <p><b>Поставщик:</b> ${order.supplier_name}</p>
+                            <p><b>Договор:</b> №${order.contract_number} от ${order.contract_date}</p>
+                            <p><b>Условия:</b> Инкотермс ${order.incoterms}, Валюта ${order.currency}</p>
+                            <p><b>Фактически заказано:</b> <span class="text-indigo-700 font-bold">${order.ordered_quantity} шт.</span></p>
+                            <p><b>Цена за ед.:</b> ${order.unit_price} ${order.currency}</p>
+                            <p class="pt-1 border-t border-indigo-200 mt-1"><b>Общая сумма:</b> <span class="font-bold text-lg">${order.total_amount} ${order.currency}</span></p>
+                        </div>
+                    `;
+                }
+            }
+
             document.getElementById('detModalBody').innerHTML = `
                 <div class="space-y-2">
-                    <p><b>Статус:</b> ${statusBadge}</p>
+                    <div class="flex justify-between items-center">
+                        <p><b>Статус:</b> ${statusBadge}</p>
+                        <p class="text-xs text-gray-500">Дата: ${new Date(order.created_at).toLocaleDateString()}</p>
+                    </div>
                     <p><b>Предприятие:</b> ${order.enterprise || '-'}</p>
                     <p><b>Направление:</b> ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
                     <p><b>Приоритет:</b> ${order.priority}</p>
-                    <p><b>Плановая дата:</b> ${order.planned_date}</p>
                     <p><b>Спецификация:</b> ${order.specification || '-'}</p>
-                    <p><b>Дата создания:</b> ${new Date(order.created_at).toLocaleString()}</p>
-                    <div class="pt-2">
+                    <div class="pt-1">
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание:</label>
                         ${downloadBtnHtml}
                     </div>
                     ${order.comment ? `<p class="mt-2 text-red-600"><b>Комментарий/История:</b> ${order.comment}</p>` : ''}
+                    
                     <hr class="my-2">
-                    <h4 class="font-bold text-gray-800">Позиция материала:</h4>
+                    <h4 class="font-bold text-gray-800">Запрос материала:</h4>
                     ${itemsDetails}
+                    ${supplierInfoHtml}
                 </div>
             `;
 
-            // Логика кнопок статуса (Workflow) + Отказ
             let extraRejectHtml = '';
             let actionButtons = `<button onclick="closeDetailModal()" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Закрыть</button>`;
             
             if (order.status === 'Черновик') {
                 actionButtons += `<button onclick="changeStatus('${order.id}', 'На согласовании')" class="px-4 py-2 text-sm font-medium text-white bg-yellow-500 rounded-lg hover:bg-yellow-600 shadow">Отправить на согласование</button>`;
             } else if (order.status === 'На согласовании') {
-                // Только на этом этапе есть возможность отказаться!
                 extraRejectHtml = `
-                    <div class="w-full bg-red-50 p-3 rounded-lg border border-red-200">
-                        <label class="block text-xs font-semibold text-red-700 mb-1">Причина отказа (обязательно для отказа):</label>
-                        <input type="text" id="rejectComment_${order.id}" placeholder="Опишите, почему заказ отклонен..." class="w-full border border-red-300 rounded-lg p-2 text-sm outline-none focus:ring-1 focus:ring-red-500 bg-white text-gray-800">
+                    <div class="w-full bg-red-50 p-3 rounded-lg border border-red-200 mb-2">
+                        <label class="block text-xs font-semibold text-red-700 mb-1">Причина отказа (обязательно):</label>
+                        <input type="text" id="rejectComment_${order.id}" placeholder="Опишите причину отклонения..." class="w-full border border-red-300 rounded-lg p-2 text-sm outline-none focus:ring-1 focus:ring-red-500 bg-white text-gray-800">
                     </div>
                 `;
                 actionButtons += `<button onclick="rejectOrder('${order.id}')" class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 shadow">❌ Отказать</button>`;
                 actionButtons += `<button onclick="changeStatus('${order.id}', 'Принят в работу')" class="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 shadow">✅ Утвердить (В работу)</button>`;
             } else if (order.status === 'Принят в работу') {
-                actionButtons += `<button onclick="changeStatus('${order.id}', 'Заказан поставщику')" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow">Сделать заказ поставщику</button>`;
+                // Клик по этой кнопке вызывает встроенную форму!
+                actionButtons += `<button onclick="showSupplierForm('${order.id}', ${totalRequestedQty})" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow">🛒 Сделать заказ поставщику</button>`;
             } else if (order.status === 'Заказан поставщику') {
-                actionButtons += `<button onclick="changeStatus('${order.id}', 'На складе')" class="px-4 py-2 text-sm font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 shadow">Принять на склад</button>`;
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'На складе')" class="px-4 py-2 text-sm font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 shadow">📦 Принять на склад</button>`;
             } else if (order.status === 'На складе') {
-                actionButtons += `<button onclick="changeStatus('${order.id}', 'Выполнен')" class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 shadow">Выдать и завершить</button>`;
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'Выполнен')" class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 shadow">✅ Выдать и завершить</button>`;
             }
 
             document.getElementById('detModalFooter').innerHTML = `
                 ${extraRejectHtml}
-                <div class="flex justify-end gap-2 w-full mt-2">
+                <div class="flex justify-end gap-2 w-full">
                     ${actionButtons}
                 </div>
             `;
@@ -588,11 +694,21 @@ async def update_order_status(order_id: str, payload: OrderStatusUpdateSchema, d
     # Обновляем статус
     order.status = payload.status
     
-    # Если передан комментарий об отказе, добавляем его в поле comment заказа
+    # Если передан комментарий об отказе
     if payload.reject_comment:
         existing_comment = order.comment if order.comment else ""
         separator = " | " if existing_comment else ""
         order.comment = f"{existing_comment}{separator}[ОТКАЗ: {payload.reject_comment}]"
+
+    # Если переданы данные от поставщика
+    if payload.supplier_name: order.supplier_name = payload.supplier_name
+    if payload.contract_number: order.contract_number = payload.contract_number
+    if payload.contract_date: order.contract_date = payload.contract_date
+    if payload.currency: order.currency = payload.currency
+    if payload.incoterms: order.incoterms = payload.incoterms
+    if payload.ordered_quantity is not None: order.ordered_quantity = payload.ordered_quantity
+    if payload.unit_price is not None: order.unit_price = payload.unit_price
+    if payload.total_amount is not None: order.total_amount = payload.total_amount
 
     await db.commit()
     return {"status": "success", "new_status": order.status}
@@ -616,6 +732,16 @@ async def get_all_orders(db: AsyncSession = Depends(get_db)):
             "specification": order.specification,
             "tech_spec_file": order.tech_spec_file,
             "comment": order.comment,
+            # Данные закупки (новые)
+            "supplier_name": order.supplier_name,
+            "contract_number": order.contract_number,
+            "contract_date": order.contract_date,
+            "currency": order.currency,
+            "incoterms": order.incoterms,
+            "ordered_quantity": order.ordered_quantity,
+            "unit_price": order.unit_price,
+            "total_amount": order.total_amount,
+            
             "items": [
                 {
                     "material_code": item.material_code,
