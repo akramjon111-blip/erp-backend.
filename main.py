@@ -86,8 +86,10 @@ class OrderCreateSchema(BaseModel):
     comment: Optional[str] = None
     items: List[OrderItemBase]
 
+# Добавлено поле для комментария отказа
 class OrderStatusUpdateSchema(BaseModel):
     status: str
+    reject_comment: Optional[str] = None
 
 # --- ПРИЛОЖЕНИЕ ---
 app = FastAPI(title="ERP Order Management API")
@@ -244,7 +246,7 @@ HTML_CONTENT = """
         </div>
     </div>
 
-    <!-- Модальное окно детализации заказа (с футером для кнопок статуса) -->
+    <!-- Модальное окно детализации заказа (обновленный футер) -->
     <div id="detailModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
         <div class="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
             <div class="flex justify-between items-center mb-4 border-b pb-2">
@@ -254,8 +256,8 @@ HTML_CONTENT = """
             <div id="detModalBody" class="space-y-4 text-sm text-gray-700">
                 <!-- Контент детализации -->
             </div>
-            <div id="detModalFooter" class="flex justify-end gap-2 mt-6 pt-3 border-t">
-                <!-- Кнопки управления статусами добавятся сюда JS-ом -->
+            <div id="detModalFooter" class="mt-6 pt-3 border-t flex flex-col gap-3">
+                <!-- Кнопки статуса и ячейка отказа добавятся сюда JS-ом -->
             </div>
         </div>
     </div>
@@ -292,13 +294,13 @@ HTML_CONTENT = """
             URL.revokeObjectURL(url);
         }
 
-        // Обновление статуса на сервере
-        async function changeStatus(orderId, newStatus) {
+        // Отправка изменения статуса (теперь с возможностью комментария при отказе)
+        async function changeStatus(orderId, newStatus, rejectComment = null) {
             try {
                 const response = await fetch(`/api/orders/${orderId}/status`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ status: newStatus })
+                    body: JSON.stringify({ status: newStatus, reject_comment: rejectComment })
                 });
                 if (response.ok) {
                     closeDetailModal();
@@ -309,6 +311,21 @@ HTML_CONTENT = """
             } catch (error) {
                 alert('Ошибка сети.');
             }
+        }
+
+        // Функция-обработчик для кнопки "Отказать"
+        function rejectOrder(orderId) {
+            const commentInput = document.getElementById('rejectComment_' + orderId);
+            const comment = commentInput ? commentInput.value.trim() : '';
+            
+            if (!comment) {
+                alert('Пожалуйста, обязательно укажите причину отказа в текстовом поле!');
+                commentInput.focus();
+                return;
+            }
+            
+            // Если комментарий есть, откатываем на "Черновик"
+            changeStatus(orderId, 'Черновик', comment);
         }
 
         orderForm.addEventListener('submit', async (e) => {
@@ -378,7 +395,6 @@ HTML_CONTENT = """
                     if (order.priority === 'Высокий') priorityColor = 'bg-red-100 text-red-700';
                     if (order.priority === 'Средний') priorityColor = 'bg-amber-100 text-amber-700';
 
-                    // Цветовые бейджики для статусов по ТЗ
                     let statusColor = 'bg-blue-100 text-blue-700';
                     if (order.status === 'На согласовании') statusColor = 'bg-yellow-100 text-yellow-700';
                     if (order.status === 'Принят в работу') statusColor = 'bg-purple-100 text-purple-700';
@@ -445,8 +461,7 @@ HTML_CONTENT = """
 
             document.getElementById('detModalTitle').innerText = `Детали заказа #${order.id}`;
             
-            let statusBadge = `<span class="px-2 py-0.5 rounded font-semibold text-white bg-gray-500">${order.status}</span>`;
-            if (order.status === 'Черновик') statusBadge = `<span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold">${order.status}</span>`;
+            let statusBadge = `<span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold">${order.status}</span>`;
             if (order.status === 'На согласовании') statusBadge = `<span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded font-semibold">${order.status}</span>`;
             if (order.status === 'Принят в работу') statusBadge = `<span class="px-2 py-0.5 bg-purple-100 text-purple-700 rounded font-semibold">${order.status}</span>`;
             if (order.status === 'Заказан поставщику') statusBadge = `<span class="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded font-semibold">${order.status}</span>`;
@@ -485,29 +500,43 @@ HTML_CONTENT = """
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание:</label>
                         ${downloadBtnHtml}
                     </div>
-                    ${order.comment ? `<p><b>Комментарий:</b> ${order.comment}</p>` : ''}
+                    ${order.comment ? `<p class="mt-2 text-red-600"><b>Комментарий/История:</b> ${order.comment}</p>` : ''}
                     <hr class="my-2">
                     <h4 class="font-bold text-gray-800">Позиция материала:</h4>
                     ${itemsDetails}
                 </div>
             `;
 
-            // Логика кнопок статуса (Workflow)
+            // Логика кнопок статуса (Workflow) + Отказ
+            let extraRejectHtml = '';
             let actionButtons = `<button onclick="closeDetailModal()" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Закрыть</button>`;
             
             if (order.status === 'Черновик') {
-                actionButtons += `<button onclick="changeStatus('${order.id}', 'На согласовании')" class="px-4 py-2 text-sm font-medium text-white bg-yellow-500 rounded-lg hover:bg-yellow-600">Отправить на согласование</button>`;
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'На согласовании')" class="px-4 py-2 text-sm font-medium text-white bg-yellow-500 rounded-lg hover:bg-yellow-600 shadow">Отправить на согласование</button>`;
             } else if (order.status === 'На согласовании') {
-                actionButtons += `<button onclick="changeStatus('${order.id}', 'Принят в работу')" class="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700">Утвердить (В работу)</button>`;
+                // Только на этом этапе есть возможность отказаться!
+                extraRejectHtml = `
+                    <div class="w-full bg-red-50 p-3 rounded-lg border border-red-200">
+                        <label class="block text-xs font-semibold text-red-700 mb-1">Причина отказа (обязательно для отказа):</label>
+                        <input type="text" id="rejectComment_${order.id}" placeholder="Опишите, почему заказ отклонен..." class="w-full border border-red-300 rounded-lg p-2 text-sm outline-none focus:ring-1 focus:ring-red-500 bg-white text-gray-800">
+                    </div>
+                `;
+                actionButtons += `<button onclick="rejectOrder('${order.id}')" class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 shadow">❌ Отказать</button>`;
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'Принят в работу')" class="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 shadow">✅ Утвердить (В работу)</button>`;
             } else if (order.status === 'Принят в работу') {
-                actionButtons += `<button onclick="changeStatus('${order.id}', 'Заказан поставщику')" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700">Сделать заказ поставщику</button>`;
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'Заказан поставщику')" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow">Сделать заказ поставщику</button>`;
             } else if (order.status === 'Заказан поставщику') {
-                actionButtons += `<button onclick="changeStatus('${order.id}', 'На складе')" class="px-4 py-2 text-sm font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600">Принять на склад</button>`;
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'На складе')" class="px-4 py-2 text-sm font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 shadow">Принять на склад</button>`;
             } else if (order.status === 'На складе') {
-                actionButtons += `<button onclick="changeStatus('${order.id}', 'Выполнен')" class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700">Выдать и завершить</button>`;
+                actionButtons += `<button onclick="changeStatus('${order.id}', 'Выполнен')" class="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 shadow">Выдать и завершить</button>`;
             }
 
-            document.getElementById('detModalFooter').innerHTML = actionButtons;
+            document.getElementById('detModalFooter').innerHTML = `
+                ${extraRejectHtml}
+                <div class="flex justify-end gap-2 w-full mt-2">
+                    ${actionButtons}
+                </div>
+            `;
             document.getElementById('detailModal').classList.remove('hidden');
         }
 
@@ -556,7 +585,15 @@ async def update_order_status(order_id: str, payload: OrderStatusUpdateSchema, d
     if not order:
         raise HTTPException(status_code=404, detail="Заказ не найден")
     
+    # Обновляем статус
     order.status = payload.status
+    
+    # Если передан комментарий об отказе, добавляем его в поле comment заказа
+    if payload.reject_comment:
+        existing_comment = order.comment if order.comment else ""
+        separator = " | " if existing_comment else ""
+        order.comment = f"{existing_comment}{separator}[ОТКАЗ: {payload.reject_comment}]"
+
     await db.commit()
     return {"status": "success", "new_status": order.status}
 
