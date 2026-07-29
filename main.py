@@ -67,7 +67,7 @@ class OrderItemModel(Base):
     manufacturer = Column(String, nullable=True)
     supplier = Column(String, nullable=True)
     specification = Column(String, nullable=True) 
-    tech_spec_file = Column(String, nullable=True) # ТЗ теперь принадлежит позиции!
+    tech_spec_file = Column(String, nullable=True)
     comment = Column(String, nullable=True)
     order = relationship("OrderModel", back_populates="items")
 
@@ -85,12 +85,12 @@ class OrderItemBase(BaseModel):
     manufacturer: Optional[str] = "-"
     supplier: Optional[str] = "-"
     specification: Optional[str] = "-" 
-    tech_spec_file: Optional[str] = "-" # ТЗ в схеме позиции
+    tech_spec_file: Optional[str] = "-" 
     comment: Optional[str] = None
 
 class OrderCreateSchema(BaseModel):
     id: str
-    enterprise: Optional[str] = "Завод №1 (Баку)"
+    enterprise: Optional[str] = None  # Изменено: теперь нет значения по умолчанию
     requesting_dept_id: str
     executing_dept_id: str
     priority: Optional[str] = "Средний"
@@ -165,7 +165,9 @@ HTML_CONTENT = """
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Предприятие</label>
-                        <select id="enterprise" class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-white">
+                        <!-- Обязательное поле с пустым выбором по умолчанию -->
+                        <select id="enterprise" required class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-white">
+                            <option value="" disabled selected>Выберите предприятие...</option>
                             <option value="Завод №1 (Баку)">Завод №1 (Баку)</option>
                             <option value="Завод №2 (Гянджа)">Завод №2 (Гянджа)</option>
                         </select>
@@ -342,7 +344,7 @@ HTML_CONTENT = """
             document.getElementById('orderModalTitle').innerText = `Редактирование заказа #${order.id}`;
             document.getElementById('submitBtn').innerText = 'Сохранить изменения';
 
-            document.getElementById('enterprise').value = order.enterprise || 'Завод №1 (Баку)';
+            document.getElementById('enterprise').value = order.enterprise || '';
             document.getElementById('priority').value = order.priority || 'Средний';
             document.getElementById('reqDept').value = order.requesting_dept_id || '';
             document.getElementById('execDept').value = order.executing_dept_id || '';
@@ -587,8 +589,6 @@ HTML_CONTENT = """
                     if (order.items && order.items.length > 0) {
                         itemsHtml = '<div class="mt-3 pt-3 border-t border-gray-100 space-y-2">';
                         order.items.forEach((item, index) => {
-                            let analogText = item.allow_analog ? 'Аналог: Да' : 'Аналог: Нет';
-                            
                             let tzText = item.tech_spec_file && item.tech_spec_file !== '-' && item.tech_spec_file !== 'Не прикреплен' 
                                 ? `<span class="ml-2 text-xs text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">📎 ТЗ: ${item.tech_spec_file}</span>` : '';
 
