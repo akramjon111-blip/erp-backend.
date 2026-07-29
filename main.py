@@ -201,13 +201,10 @@ HTML_CONTENT = """
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание (ТЗ)</label>
-                        
-                        <!-- Блок удаления текущего файла при редактировании -->
                         <div id="currentFileBox" class="hidden mb-2 bg-blue-50 text-blue-700 text-xs px-2 py-1.5 rounded flex justify-between items-center border border-blue-100">
                             <span id="currentFileName" class="truncate max-w-[120px] font-medium">Файл.docx</span>
                             <button type="button" onclick="removeCurrentFile()" class="text-red-500 hover:text-red-700 font-bold ml-2" title="Удалить прикрепленный файл">✕ Удалить</button>
                         </div>
-                        
                         <input type="file" id="techSpecFile" class="w-full border border-gray-200 rounded-lg p-1 text-xs bg-white text-gray-500">
                     </div>
                     <div>
@@ -215,45 +212,20 @@ HTML_CONTENT = """
                         <input type="text" id="orderComment" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Примечания...">
                     </div>
                 </div>
+                
                 <hr class="my-3 border-gray-200">
-                <h3 class="font-bold text-sm text-gray-700">Позиция материала</h3>
-                <div class="grid grid-cols-3 gap-2">
-                    <div class="col-span-1">
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Код материала</label>
-                        <input type="text" id="itemCode" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="MAT-001">
-                    </div>
-                    <div class="col-span-2">
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Наименование</label>
-                        <input type="text" id="itemName" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Подшипник">
-                    </div>
+                
+                <!-- Заголовок и кнопка добавления позиций -->
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="font-bold text-sm text-gray-700">Позиции (Товары / Услуги)</h3>
+                    <button type="button" onclick="addItemRow()" class="bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1 rounded-lg text-xs font-bold transition shadow-sm">+ Добавить позицию</button>
                 </div>
-                <div class="grid grid-cols-3 gap-2">
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Количество</label>
-                        <input type="number" id="itemQty" required min="1" class="w-full border border-gray-300 rounded-lg p-2 text-sm" value="1">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Ед. изм.</label>
-                        <input type="text" id="itemUnit" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" value="шт">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Аналог (Да/Нет)</label>
-                        <select id="allowAnalog" class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-white">
-                            <option value="true">Да</option>
-                            <option value="false">Нет</option>
-                        </select>
-                    </div>
+                
+                <!-- Контейнер для динамических строк позиций -->
+                <div id="itemsContainer" class="space-y-3">
+                    <!-- JavaScript будет вставлять сюда блоки товаров -->
                 </div>
-                <div class="grid grid-cols-2 gap-2">
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Производитель</label>
-                        <input type="text" id="manufacturer" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="SKF / Bosch">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Поставщик (если есть)</label>
-                        <input type="text" id="supplier" class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="ООО «Поставка»">
-                    </div>
-                </div>
+                
                 <div class="flex justify-end space-x-2 mt-5 pt-3 border-t border-gray-200">
                     <button type="button" id="closeModalBtn" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Отмена</button>
                     <button type="submit" id="submitBtn" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">Создать заказ</button>
@@ -280,15 +252,66 @@ HTML_CONTENT = """
 
     <script>
         let ordersCache = [];
-        let editingOrderId = null; // Хранит ID заказа, если мы его редактируем
-        let existingFileName = null; // Хранит имя файла при редактировании
+        let editingOrderId = null;
+        let existingFileName = null;
 
         const modal = document.getElementById('orderModal');
         const fabAdd = document.getElementById('fabAdd');
         const closeModalBtn = document.getElementById('closeModalBtn');
         const orderForm = document.getElementById('orderForm');
+        const itemsContainer = document.getElementById('itemsContainer');
 
-        // Открытие формы на создание нового
+        // ФУНКЦИЯ ДОБАВЛЕНИЯ НОВОЙ ПОЗИЦИИ В ФОРМУ
+        function addItemRow(itemData = null) {
+            const row = document.createElement('div');
+            row.className = 'item-row bg-gray-50 p-3 rounded-lg border border-gray-200 relative';
+            
+            // Кнопка удаления позиции
+            const removeBtn = `<button type="button" onclick="this.closest('.item-row').remove()" class="absolute top-2 right-2 text-red-500 hover:text-red-700 text-xs font-bold bg-white px-2 py-0.5 rounded border border-red-200 shadow-sm">✕ Удалить</button>`;
+
+            row.innerHTML = `
+                ${removeBtn}
+                <div class="grid grid-cols-3 gap-2 mb-2 pr-20">
+                    <div class="col-span-1">
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Код</label>
+                        <input type="text" class="i-code w-full border border-gray-300 rounded p-1.5 text-xs bg-white" required placeholder="MAT-001" value="${itemData ? (itemData.material_code || '') : ''}">
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Наименование</label>
+                        <input type="text" class="i-name w-full border border-gray-300 rounded p-1.5 text-xs bg-white" required placeholder="Товар или услуга" value="${itemData ? (itemData.name || '') : ''}">
+                    </div>
+                </div>
+                <div class="grid grid-cols-3 gap-2 mb-2">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Кол-во</label>
+                        <input type="number" step="0.01" class="i-qty w-full border border-gray-300 rounded p-1.5 text-xs bg-white" required min="0.01" value="${itemData ? (itemData.requested_quantity || 1) : 1}">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Ед. изм.</label>
+                        <input type="text" class="i-unit w-full border border-gray-300 rounded p-1.5 text-xs bg-white" required value="${itemData ? (itemData.unit || 'шт') : 'шт'}">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Аналог</label>
+                        <select class="i-analog w-full border border-gray-300 rounded p-1.5 text-xs bg-white">
+                            <option value="true" ${itemData && itemData.allow_analog ? 'selected' : ''}>Да</option>
+                            <option value="false" ${itemData && !itemData.allow_analog ? 'selected' : ''}>Нет</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Производитель</label>
+                        <input type="text" class="i-manuf w-full border border-gray-300 rounded p-1.5 text-xs bg-white" placeholder="SKF / Bosch" value="${itemData ? (itemData.manufacturer || '') : ''}">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Ожидаемый поставщик</label>
+                        <input type="text" class="i-supp w-full border border-gray-300 rounded p-1.5 text-xs bg-white" placeholder="ООО..." value="${itemData ? (itemData.supplier || '') : ''}">
+                    </div>
+                </div>
+            `;
+            itemsContainer.appendChild(row);
+        }
+
         fabAdd.addEventListener('click', () => {
             editingOrderId = null;
             existingFileName = null;
@@ -296,6 +319,11 @@ HTML_CONTENT = """
             document.getElementById('submitBtn').innerText = 'Создать заказ';
             document.getElementById('currentFileBox').classList.add('hidden');
             orderForm.reset();
+            
+            // Очищаем и добавляем одну пустую позицию по умолчанию
+            itemsContainer.innerHTML = '';
+            addItemRow();
+            
             modal.classList.remove('hidden');
         });
 
@@ -308,15 +336,13 @@ HTML_CONTENT = """
             document.getElementById('detailModal').classList.add('hidden');
         }
 
-        // Удаление файла при редактировании
         function removeCurrentFile() {
             existingFileName = 'Не прикреплен';
             document.getElementById('currentFileBox').classList.add('hidden');
         }
 
-        // Открытие формы на редактирование Черновика
         function openEditForm(orderId) {
-            closeDetailModal(); // закрываем детали
+            closeDetailModal();
             const order = ordersCache.find(o => o.id === orderId);
             if (!order) return;
 
@@ -324,19 +350,14 @@ HTML_CONTENT = """
             document.getElementById('orderModalTitle').innerText = `Редактирование заказа #${order.id}`;
             document.getElementById('submitBtn').innerText = 'Сохранить изменения';
 
-            // Заполняем поля старыми данными
             document.getElementById('enterprise').value = order.enterprise || 'Завод №1 (Баку)';
             document.getElementById('priority').value = order.priority || 'Средний';
             document.getElementById('reqDept').value = order.requesting_dept_id || '';
             document.getElementById('execDept').value = order.executing_dept_id || '';
             document.getElementById('plannedDate').value = order.planned_date || '';
             document.getElementById('specification').value = order.specification && order.specification !== '-' ? order.specification : '';
-            
-            // Очищаем комментарий от системных пометок отказа, если нужно, или просто выводим
-            let cleanComment = order.comment || '';
-            document.getElementById('orderComment').value = cleanComment;
+            document.getElementById('orderComment').value = order.comment || '';
 
-            // Работа с файлом ТЗ
             existingFileName = order.tech_spec_file;
             if (existingFileName && existingFileName !== '-' && existingFileName !== 'Не прикреплен') {
                 document.getElementById('currentFileName').innerText = existingFileName;
@@ -345,29 +366,42 @@ HTML_CONTENT = """
                 document.getElementById('currentFileBox').classList.add('hidden');
             }
 
-            // Заполняем позицию (пока берем первую)
+            // Очищаем контейнер и рендерим все существующие позиции
+            itemsContainer.innerHTML = '';
             if (order.items && order.items.length > 0) {
-                const item = order.items[0];
-                document.getElementById('itemCode').value = item.material_code || '';
-                document.getElementById('itemName').value = item.name || '';
-                document.getElementById('itemQty').value = item.requested_quantity || 1;
-                document.getElementById('itemUnit').value = item.unit || 'шт';
-                document.getElementById('allowAnalog').value = item.allow_analog ? 'true' : 'false';
-                document.getElementById('manufacturer').value = item.manufacturer && item.manufacturer !== '-' ? item.manufacturer : '';
-                document.getElementById('supplier').value = item.supplier && item.supplier !== '-' ? item.supplier : '';
+                order.items.forEach(item => addItemRow(item));
+            } else {
+                addItemRow(); // Если вдруг пустой, добавляем хотя бы одну строку
             }
 
             modal.classList.remove('hidden');
         }
 
-        // Сохранение заказа (создание ИЛИ редактирование)
         orderForm.addEventListener('submit', async (e) => {
             e.preventDefault(); 
             
+            // СБОР ДАННЫХ ИЗ ВСЕХ БЛОКОВ ПОЗИЦИЙ
+            const itemsList = [];
+            document.querySelectorAll('.item-row').forEach(row => {
+                itemsList.push({
+                    material_code: row.querySelector('.i-code').value.trim() || '-',
+                    name: row.querySelector('.i-name').value.trim(),
+                    unit: row.querySelector('.i-unit').value.trim(),
+                    requested_quantity: parseFloat(row.querySelector('.i-qty').value) || 1,
+                    stock_balance: 0,
+                    allow_analog: row.querySelector('.i-analog').value === 'true',
+                    manufacturer: row.querySelector('.i-manuf').value.trim() || '-',
+                    supplier: row.querySelector('.i-supp').value.trim() || '-'
+                });
+            });
+
+            if (itemsList.length === 0) {
+                alert("Ошибка: в заказе должна быть хотя бы одна позиция!");
+                return;
+            }
+
             const fileInput = document.getElementById('techSpecFile');
             let finalFileName = 'Не прикреплен';
-            
-            // Если загружен новый файл - берем его, иначе оставляем старый (если его не удалили)
             if (fileInput.files.length > 0) {
                 finalFileName = fileInput.files[0].name;
             } else if (existingFileName && existingFileName !== '-' && existingFileName !== 'Не прикреплен') {
@@ -384,18 +418,7 @@ HTML_CONTENT = """
                 specification: document.getElementById('specification').value || '-',
                 tech_spec_file: finalFileName,
                 comment: document.getElementById('orderComment').value || '',
-                items: [
-                    {
-                        material_code: document.getElementById('itemCode').value,
-                        name: document.getElementById('itemName').value,
-                        unit: document.getElementById('itemUnit').value,
-                        requested_quantity: parseFloat(document.getElementById('itemQty').value),
-                        stock_balance: 0,
-                        allow_analog: document.getElementById('allowAnalog').value === 'true',
-                        manufacturer: document.getElementById('manufacturer').value || '-',
-                        supplier: document.getElementById('supplier').value || '-'
-                    }
-                ]
+                items: itemsList
             };
 
             const url = editingOrderId ? `/api/orders/${editingOrderId}` : '/api/orders';
@@ -419,7 +442,6 @@ HTML_CONTENT = """
             }
         });
 
-        // Скачивание ТЗ
         function downloadTechSpec(orderId, fileName) {
             const content = `ТЕХНИЧЕСКОЕ ЗАДАНИЕ\\nСистема управления заказами материалов\\n----------------------------------------\\nЗаказ №: ${orderId}\\nПрикрепленный файл: ${fileName}\\nДата скачивания: ${new Date().toLocaleString()}\\nСтатус: Успешно выгружено из системы.`;
             const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -433,7 +455,6 @@ HTML_CONTENT = """
             URL.revokeObjectURL(url);
         }
 
-        // Обновление статуса
         async function changeStatus(orderId, newStatus, rejectComment = null, supplierData = {}) {
             try {
                 const payload = { status: newStatus, reject_comment: rejectComment, ...supplierData };
@@ -464,7 +485,7 @@ HTML_CONTENT = """
             changeStatus(orderId, 'Черновик', comment);
         }
 
-        // --- ЛОГИКА ФОРМЫ ЗАКУПКИ ---
+        // --- ФОРМА ПОСТАВЩИКА ---
         function showSupplierForm(orderId, maxQty) {
             const footer = document.getElementById('detModalFooter');
             footer.innerHTML = `
@@ -504,15 +525,15 @@ HTML_CONTENT = """
                             </select>
                         </div>
                         <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Кол-во (не больше ${maxQty})</label>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Кол-во ед. (макс. ${maxQty})</label>
                             <input type="number" id="supQty" class="w-full border border-gray-300 rounded p-1.5 text-sm font-bold text-blue-700" value="${maxQty}" oninput="calcSum(${maxQty})" required>
                         </div>
                         <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Цена за единицу</label>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Средняя цена за ед.</label>
                             <input type="number" id="supPrice" step="0.01" class="w-full border border-gray-300 rounded p-1.5 text-sm" placeholder="0.00" oninput="calcSum(${maxQty})" required>
                         </div>
                         <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Итоговая сумма</label>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Общая сумма закупки</label>
                             <input type="text" id="supTotal" class="w-full border border-indigo-200 bg-indigo-100 rounded p-1.5 text-sm font-bold text-indigo-900 outline-none" readonly value="0.00">
                         </div>
                     </div>
@@ -528,7 +549,7 @@ HTML_CONTENT = """
             const qtyInput = document.getElementById('supQty');
             let qty = parseFloat(qtyInput.value) || 0;
             if (qty > maxQty) {
-                alert('Ошибка: Количество не может превышать исходный запрос (' + maxQty + ')!');
+                alert('Внимание: Общее количество не может превышать исходный суммарный запрос (' + maxQty + ')!');
                 qtyInput.value = maxQty;
                 qty = maxQty;
             }
@@ -583,12 +604,12 @@ HTML_CONTENT = """
                     let itemsHtml = '';
                     if (order.items && order.items.length > 0) {
                         itemsHtml = '<div class="mt-3 pt-3 border-t border-gray-100 space-y-2">';
-                        order.items.forEach(item => {
+                        order.items.forEach((item, index) => {
                             let analogText = item.allow_analog ? 'Аналог: Да' : 'Аналог: Нет';
                             itemsHtml += `
-                                <div class="bg-gray-50 p-2.5 rounded-lg text-sm">
+                                <div class="bg-gray-50 p-2.5 rounded-lg text-sm border-l-4 border-blue-400">
                                     <div class="flex justify-between font-medium text-gray-900">
-                                        <span>${item.name} (${item.material_code})</span>
+                                        <span>${index + 1}. ${item.name} <span class="text-xs text-gray-500 font-normal">(${item.material_code})</span></span>
                                         <span>${item.requested_quantity} ${item.unit}</span>
                                     </div>
                                 </div>
@@ -643,9 +664,10 @@ HTML_CONTENT = """
 
             let itemsDetails = '';
             if (order.items) {
-                order.items.forEach(item => {
+                order.items.forEach((item, idx) => {
                     itemsDetails += `
-                        <div class="bg-gray-50 p-3 rounded-lg border border-gray-200 space-y-1">
+                        <div class="bg-gray-50 p-3 rounded-lg border border-gray-200 space-y-1 relative">
+                            <span class="absolute top-2 right-2 text-xs font-bold text-gray-400">Позиция ${idx + 1}</span>
                             <div><b>Наименование:</b> ${item.name} (${item.material_code})</div>
                             <div><b>Количество:</b> ${item.requested_quantity} ${item.unit}</div>
                             <div><b>Производитель:</b> ${item.manufacturer || '-'}</div>
@@ -670,8 +692,8 @@ HTML_CONTENT = """
                             <p><b>Поставщик:</b> ${order.supplier_name}</p>
                             <p><b>Договор:</b> №${order.contract_number} от ${order.contract_date}</p>
                             <p><b>Условия:</b> Инкотермс ${order.incoterms}, Валюта ${order.currency}</p>
-                            <p><b>Фактически заказано:</b> <span class="text-indigo-700 font-bold">${order.ordered_quantity} шт.</span></p>
-                            <p><b>Цена за ед.:</b> ${order.unit_price} ${order.currency}</p>
+                            <p><b>Фактически заказано:</b> <span class="text-indigo-700 font-bold">${order.ordered_quantity} ед. (из ${totalRequestedQty})</span></p>
+                            <p><b>Ср. цена за ед.:</b> ${order.unit_price} ${order.currency}</p>
                             <p class="pt-1 border-t border-indigo-200 mt-1"><b>Общая сумма:</b> <span class="font-bold text-lg">${order.total_amount} ${order.currency}</span></p>
                         </div>
                     `;
@@ -695,8 +717,10 @@ HTML_CONTENT = """
                     ${order.comment ? `<p class="mt-2 text-red-600"><b>Комментарий/История:</b> ${order.comment}</p>` : ''}
                     
                     <hr class="my-2">
-                    <h4 class="font-bold text-gray-800">Запрос материала:</h4>
-                    ${itemsDetails}
+                    <h4 class="font-bold text-gray-800">Запрошенные позиции:</h4>
+                    <div class="space-y-2">
+                        ${itemsDetails}
+                    </div>
                     ${supplierInfoHtml}
                 </div>
             `;
@@ -706,7 +730,6 @@ HTML_CONTENT = """
             let extraRejectHtml = '';
             
             if (order.status === 'Черновик') {
-                // Кнопка редактирования только для черновиков!
                 leftActionButtons = `<button onclick="openEditForm('${order.id}')" class="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 shadow">✏️ Редактировать</button>`;
                 rightActionButtons += `<button onclick="changeStatus('${order.id}', 'На согласовании')" class="px-4 py-2 text-sm font-medium text-white bg-yellow-500 rounded-lg hover:bg-yellow-600 shadow">Отправить на согласование</button>`;
             } else if (order.status === 'На согласовании') {
@@ -782,7 +805,6 @@ async def edit_order(order_id: str, order_data: OrderCreateSchema, db: AsyncSess
     if order.status != "Черновик":
         raise HTTPException(status_code=400, detail="Редактировать можно только черновики")
 
-    # Обновляем основные поля
     order.enterprise = order_data.enterprise
     order.requesting_dept_id = order_data.requesting_dept_id
     order.executing_dept_id = order_data.executing_dept_id
@@ -792,10 +814,7 @@ async def edit_order(order_id: str, order_data: OrderCreateSchema, db: AsyncSess
     order.tech_spec_file = order_data.tech_spec_file
     order.comment = order_data.comment
     
-    # Удаляем старые позиции материала
     await db.execute(delete(OrderItemModel).where(OrderItemModel.order_id == order_id))
-    
-    # Добавляем обновленные позиции
     for item in order_data.items:
         new_item = OrderItemModel(**item.model_dump())
         new_item.order_id = order_id
