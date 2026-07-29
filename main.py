@@ -89,8 +89,8 @@ class OrderItemBase(BaseModel):
     comment: Optional[str] = None
 
 class OrderCreateSchema(BaseModel):
-    id: str
-    enterprise: Optional[str] = None  # Изменено: теперь нет значения по умолчанию
+    id: Optional[str] = ""  # ID теперь опциональный, бэкенд сгенерирует его сам
+    enterprise: Optional[str] = None  
     requesting_dept_id: str
     executing_dept_id: str
     priority: Optional[str] = "Средний"
@@ -165,7 +165,6 @@ HTML_CONTENT = """
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Предприятие</label>
-                        <!-- Обязательное поле с пустым выбором по умолчанию -->
                         <select id="enterprise" required class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-white">
                             <option value="" disabled selected>Выберите предприятие...</option>
                             <option value="Завод №1 (Баку)">Завод №1 (Баку)</option>
@@ -396,7 +395,7 @@ HTML_CONTENT = """
             }
 
             const orderData = {
-                id: editingOrderId ? editingOrderId : Math.floor(Math.random() * 90000 + 10000).toString(), 
+                id: editingOrderId ? editingOrderId : "", // Передаем пустую строку для нового заказа
                 enterprise: document.getElementById('enterprise').value,
                 requesting_dept_id: document.getElementById('reqDept').value,
                 executing_dept_id: document.getElementById('execDept').value,
@@ -590,15 +589,18 @@ HTML_CONTENT = """
                         itemsHtml = '<div class="mt-3 pt-3 border-t border-gray-100 space-y-2">';
                         order.items.forEach((item, index) => {
                             let tzText = item.tech_spec_file && item.tech_spec_file !== '-' && item.tech_spec_file !== 'Не прикреплен' 
-                                ? `<span class="ml-2 text-xs text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">📎 ТЗ: ${item.tech_spec_file}</span>` : '';
+                                ? `<span class="ml-2 text-xs text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">📎 ТЗ: ${item.tech_spec_file}</span>` : '';
 
                             itemsHtml += `
                                 <div class="bg-gray-50 p-2.5 rounded-lg text-sm border-l-4 border-blue-400">
-                                    <div class="flex justify-between font-medium text-gray-900">
-                                        <span>${index + 1}. ${item.name} <span class="text-xs text-gray-500 font-normal">(${item.material_code})</span>${tzText}</span>
+                                    <div class="flex justify-between items-start font-medium text-gray-900">
+                                        <div class="flex flex-col">
+                                            <span>${index + 1}. ${item.name} <span class="text-xs text-gray-500 font-normal">(${item.material_code})</span></span>
+                                            ${tzText ? `<div class="mt-1">${tzText}</div>` : ''}
+                                        </div>
                                         <span>${item.requested_quantity} ${item.unit}</span>
                                     </div>
-                                    ${item.specification && item.specification !== '-' ? `<div class="text-xs text-blue-700 mt-1 bg-blue-50 p-1.5 rounded whitespace-pre-wrap font-mono">${item.specification}</div>` : ''}
+                                    ${item.specification && item.specification !== '-' ? `<div class="text-xs text-blue-700 mt-2 bg-blue-50 p-1.5 rounded whitespace-pre-wrap font-mono border border-blue-100">${item.specification}</div>` : ''}
                                 </div>
                             `;
                         });
@@ -659,7 +661,7 @@ HTML_CONTENT = """
             if (order.items) {
                 order.items.forEach((item, idx) => {
                     let itemDownloadBtn = item.tech_spec_file && item.tech_spec_file !== '-' && item.tech_spec_file !== 'Не прикреплен'
-                        ? `<button onclick="downloadTechSpec('${order.id}', '${item.tech_spec_file}')" class="mt-2 inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs font-semibold hover:bg-blue-100 transition cursor-pointer">📥 Скачать ТЗ (${item.tech_spec_file})</button>`
+                        ? `<button onclick="downloadTechSpec('${order.id}', '${item.tech_spec_file}')" class="mt-2 inline-flex items-center gap-1 px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs font-semibold hover:bg-indigo-100 transition cursor-pointer border border-indigo-200">📥 Скачать ТЗ (${item.tech_spec_file})</button>`
                         : '<div class="mt-2 text-gray-400 text-xs">Файл ТЗ не прикреплен</div>';
 
                     itemsDetails += `
@@ -670,7 +672,7 @@ HTML_CONTENT = """
                             <div><b>Производитель:</b> ${item.manufacturer || '-'}</div>
                             <div><b>Поставщик (ожидаемый):</b> ${item.supplier || '-'}</div>
                             <div><b>Допуск аналога:</b> ${item.allow_analog ? 'Да' : 'Нет'}</div>
-                            ${item.specification && item.specification !== '-' ? `<div class="mt-2 text-blue-800 bg-blue-100 p-2 rounded text-sm whitespace-pre-wrap font-mono"><b>Спецификация:</b><br>${item.specification}</div>` : ''}
+                            ${item.specification && item.specification !== '-' ? `<div class="mt-2 text-blue-800 bg-blue-100 p-2 rounded text-sm whitespace-pre-wrap font-mono border border-blue-200"><b>Спецификация:</b><br>${item.specification}</div>` : ''}
                             ${itemDownloadBtn}
                         </div>
                     `;
@@ -766,12 +768,42 @@ async def web_app():
 # --- API ЭНДПОИНТЫ ---
 @app.post("/api/orders", response_model=dict)
 async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(OrderModel).filter_by(id=order_data.id))
-    if result.scalars().first():
-        raise HTTPException(status_code=400, detail="Заказ с таким ID уже существует")
+    order_id = order_data.id
+    if not order_id:
+        # Автогенерация ID по правилу: АББР-ММ.ГГГГ.НОМЕР
+        dept = order_data.requesting_dept_id.strip() if order_data.requesting_dept_id else "DEP"
+        words = dept.split()
+        if not words:
+            abbr = "DEP"
+        elif len(words) == 1:
+            abbr = words[0][:3].upper()
+        else:
+            abbr = "".join([w[0] for w in words])[:3].upper()
+            
+        now = datetime.utcnow()
+        mm = now.strftime("%m")
+        yyyy = now.strftime("%Y")
+        
+        result = await db.execute(select(OrderModel))
+        orders = result.scalars().all()
+        count = len(orders)
+        seq = str(count + 1).zfill(3)
+        
+        order_id = f"{abbr}-{mm}.{yyyy}.{seq}"
+        
+        collision = await db.execute(select(OrderModel).filter_by(id=order_id))
+        while collision.scalars().first():
+            count += 1
+            seq = str(count + 1).zfill(3)
+            order_id = f"{abbr}-{mm}.{yyyy}.{seq}"
+            collision = await db.execute(select(OrderModel).filter_by(id=order_id))
+    else:
+        result = await db.execute(select(OrderModel).filter_by(id=order_id))
+        if result.scalars().first():
+            raise HTTPException(status_code=400, detail="Заказ с таким ID уже существует")
 
     new_order = OrderModel(
-        id=order_data.id,
+        id=order_id,
         enterprise=order_data.enterprise,
         requesting_dept_id=order_data.requesting_dept_id,
         executing_dept_id=order_data.executing_dept_id,
