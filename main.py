@@ -17,7 +17,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Float, Boolean, Enum, update
 from sqlalchemy.orm import declarative_base, relationship, selectinload
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.future import select
 import enum
 
@@ -30,10 +29,10 @@ DATABASE_URL = "sqlite+aiosqlite:///./erp_orders.db"
 Base = declarative_base()
 
 class OrderStatus(str, enum.Enum):
-    DRAFT = "DRAFT"
-    PENDING_APPROVAL = "PENDING_APPROVAL"
-    IN_PURCHASING = "IN_PURCHASING"
-    COMPLETED = "COMPLETED"
+    DRAFT = "Черновик"
+    PENDING_APPROVAL = "На согласовании"
+    IN_PURCHASING = "Принят в работу"
+    COMPLETED = "Выполнен"
 
 class UserRole(str, enum.Enum):
     INITIATOR = "INITIATOR"
@@ -45,7 +44,7 @@ class UserModel(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String, unique=True, index=True)
-    password_hash = Column(String) # В реальности храним хеш!
+    password_hash = Column(String)
     name = Column(String)
     role = Column(Enum(UserRole))
     fcm_token = Column(String, nullable=True)
@@ -54,9 +53,13 @@ class OrderModel(Base):
     __tablename__ = "orders"
     id = Column(String, primary_key=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    status = Column(Enum(OrderStatus), default=OrderStatus.DRAFT)
+    status = Column(Enum(OrderStatus, values_callable=lambda obj: [e.value for e in obj]), default=OrderStatus.DRAFT)
+    enterprise = Column(String, nullable=True)             # Новое по ТЗ: Предприятие[cite: 1]
     requesting_dept_id = Column(String)
     executing_dept_id = Column(String)
+    priority = Column(String, default="Средний")            # Новое по ТЗ: Приоритет[cite: 1]
+    planned_date = Column(String, nullable=True)            # Новое по ТЗ: Плановая дата получения[cite: 1]
+    comment = Column(String, nullable=True)                 # Новое по ТЗ: Комментарий[cite: 1]
     responsible_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     items = relationship("OrderItemModel", back_populates="order", cascade="all, delete-orphan")
 
@@ -68,8 +71,11 @@ class OrderItemModel(Base):
     name = Column(String)
     unit = Column(String)
     requested_quantity = Column(Float)
-    stock_balance = Column(Float)
-    allow_analog = Column(Boolean, default=False)
+    stock_balance = Column(Float, default=0)
+    allow_analog = Column(Boolean, default=False)           # Новое по ТЗ: Аналог допускается[cite: 1]
+    manufacturer = Column(String, nullable=True)            # Новое по ТЗ: Производитель[cite: 1]
+    supplier = Column(String, nullable=True)                # Новое по ТЗ: Поставщик[cite: 1]
+    comment = Column(String, nullable=True)                 # Комментарий к позиции
     order = relationship("OrderModel", back_populates="items")
 
 class StatusHistoryModel(Base):
@@ -78,8 +84,8 @@ class StatusHistoryModel(Base):
     order_id = Column(String, ForeignKey("orders.id"))
     changed_at = Column(DateTime, default=datetime.utcnow)
     user_id = Column(Integer, ForeignKey("users.id"))
-    old_status = Column(Enum(OrderStatus), nullable=True)
-    new_status = Column(Enum(OrderStatus))
+    old_status = Column(String, nullable=True)
+    new_status = Column(String)
     comment = Column(String, nullable=True)
 
 engine = create_async_engine(DATABASE_URL, echo=False)
@@ -101,21 +107,32 @@ class OrderItemBase(BaseModel):
     name: str
     unit: str
     requested_quantity: float
-    stock_balance: float
-    allow_analog: bool
+    stock_balance: float = 0
+    allow_analog: bool = True
+    manufacturer: Optional[str] = "-"
+    supplier: Optional[str] = "-"
+    comment: Optional[str] = None
 
 class OrderCreateSchema(BaseModel):
     id: str
+    enterprise: Optional[str] = "Завод №1 (Баку)"
     requesting_dept_id: str
     executing_dept_id: str
+    priority: Optional[str] = "Средний"
+    planned_date: Optional[str] = "Не указана"
+    comment: Optional[str] = None
     items: List[OrderItemBase]
 
 class OrderResponseSchema(BaseModel):
     id: str
     created_at: datetime
-    status: OrderStatus
+    status: str
+    enterprise: Optional[str]
     requesting_dept_id: str
     executing_dept_id: str
+    priority: Optional[str]
+    planned_date: Optional[str]
+    comment: Optional[str]
     responsible_user_id: Optional[int]
     items: List[OrderItemBase]
 
@@ -125,10 +142,11 @@ class OrderResponseSchema(BaseModel):
 # --- ИНИЦИАЛИЗАЦИЯ И ЗАВИСИМОСТИ ---
 app = FastAPI(title="ERP Order Management API")
 templates = Jinja2Templates(directory="templates")
+
 @app.get("/app", response_class=HTMLResponse)
 async def web_app(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
-# Настройка CORS для работы в онлайне
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -160,7 +178,6 @@ async def startup_event():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         
-    # Добавим тестового пользователя, если БД пуста
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(UserModel).limit(1))
         if not result.scalars().first():
@@ -195,25 +212,25 @@ async def update_fcm_token(
 
 @app.post("/api/orders", response_model=OrderResponseSchema)
 async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends(get_db)):
-    # 1. Проверяем, нет ли уже заказа с таким ID
     result = await db.execute(select(OrderModel).filter_by(id=order_data.id))
     if result.scalars().first():
         raise HTTPException(status_code=400, detail="Заказ с таким ID уже существует")
 
-    # 2. Создаем заказ
     new_order = OrderModel(
         id=order_data.id,
+        enterprise=order_data.enterprise,
         requesting_dept_id=order_data.requesting_dept_id,
         executing_dept_id=order_data.executing_dept_id,
+        priority=order_data.priority,
+        planned_date=order_data.planned_date,
+        comment=order_data.comment,
+        status="Черновик"
     )
     for item in order_data.items:
         new_order.items.append(OrderItemModel(**item.model_dump()))
     
-    # 3. Сохраняем в базу
     db.add(new_order)
     await db.commit()
-    
-    # 4. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: принудительно подгружаем позиции заказа (items)
     await db.refresh(new_order, attribute_names=['items'])
     
     return new_order
@@ -238,14 +255,10 @@ async def assign_employee(
     order.responsible_user_id = payload.employee_id
     
     audit_log = StatusHistoryModel(
-        order_id=order.id, user_id=user_id, old_status=order.status, new_status=order.status,
+        order_id=order.id, user_id=user_id, old_status=str(order.status), new_status=str(order.status),
         comment=f"Заказ назначен на сотрудника ID:{payload.employee_id}"
     )
     db.add(audit_log)
     await db.commit()
     await db.refresh(order)
-    
     return order
-
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
