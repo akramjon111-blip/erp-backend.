@@ -13,7 +13,7 @@ from typing import List, Optional
 # --- КОНФИГУРАЦИЯ ---
 SECRET_KEY = "super_secret_key_change_me"
 ALGORITHM = "HS256"
-# ВАЖНО: База данных V6 (защита от NoneType ошибок в математике)
+# БАЗУ НЕ МЕНЯЕМ (все твои заказы на месте)
 DATABASE_URL = "sqlite+aiosqlite:///./erp_orders_v6.db"
 
 # --- БАЗА ДАННЫХ ---
@@ -255,14 +255,14 @@ HTML_CONTENT = """
     </header>
 
     <!-- ВКЛАДКИ -->
-    <div class="bg-white border-b border-gray-200 flex px-4 shadow-sm z-0 relative">
-        <button id="tabOrders" class="px-5 py-3 font-bold border-b-2 border-blue-600 text-blue-600 transition" onclick="switchTab('orders')">Мои заказы</button>
-        <button id="tabContracts" class="px-5 py-3 font-bold border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition" onclick="switchTab('contracts')">Договоры поставки</button>
-        <button id="tabInvoices" class="px-5 py-3 font-bold border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition flex items-center gap-2" onclick="switchTab('invoices')">Инвойсы и Фактуры</button>
+    <div class="bg-white border-b border-gray-200 flex px-4 shadow-sm z-0 relative overflow-x-auto">
+        <button id="tabOrders" class="px-5 py-3 font-bold border-b-2 border-blue-600 text-blue-600 transition whitespace-nowrap" onclick="switchTab('orders')">Мои заказы</button>
+        <button id="tabContracts" class="px-5 py-3 font-bold border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition whitespace-nowrap" onclick="switchTab('contracts')">Договоры поставки</button>
+        <button id="tabInvoices" class="px-5 py-3 font-bold border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition flex items-center gap-2 whitespace-nowrap" onclick="switchTab('invoices')">Инвойсы и Фактуры</button>
     </div>
 
     <main class="flex-1 overflow-y-auto p-4" id="mainContent">
-        <div class="flex items-center justify-center h-full"><p class="text-gray-500 text-center">Загрузка...</p></div>
+        <div class="flex items-center justify-center h-full"><p class="text-gray-500 text-center">Загрузка данных...</p></div>
     </main>
 
     <!-- Заказ: Создание -->
@@ -399,9 +399,9 @@ HTML_CONTENT = """
         // --- УПРАВЛЕНИЕ ВКЛАДКАМИ ---
         function switchTab(tab) {
             currentTab = tab;
-            document.getElementById('tabOrders').className = `px-5 py-3 font-bold transition border-b-2 ${tab === 'orders' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`;
-            document.getElementById('tabContracts').className = `px-5 py-3 font-bold transition border-b-2 ${tab === 'contracts' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`;
-            document.getElementById('tabInvoices').className = `px-5 py-3 font-bold transition border-b-2 ${tab === 'invoices' ? 'border-teal-600 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`;
+            document.getElementById('tabOrders').className = `px-5 py-3 font-bold transition border-b-2 ${tab === 'orders' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'} whitespace-nowrap`;
+            document.getElementById('tabContracts').className = `px-5 py-3 font-bold transition border-b-2 ${tab === 'contracts' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'} whitespace-nowrap`;
+            document.getElementById('tabInvoices').className = `px-5 py-3 font-bold transition border-b-2 ${tab === 'invoices' ? 'border-teal-600 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'} flex items-center gap-2 whitespace-nowrap`;
             
             const btnContainer = document.getElementById('headerActions');
             if(tab === 'orders') {
@@ -425,6 +425,7 @@ HTML_CONTENT = """
                 invoicesCache = await resInv.json();
                 renderApp();
             } catch (err) {
+                console.error(err);
                 document.getElementById('mainContent').innerHTML = '<p class="text-red-500 text-center mt-10">Ошибка загрузки. Нажмите Ctrl+F5.</p>';
             }
         }
@@ -772,6 +773,7 @@ HTML_CONTENT = """
 
         // Запуск
         switchTab('orders');
+        fetchData(); // <-- ВАЖНО: Восстановил автозагрузку!
         window.onclick = function(e) { if(e.target.classList.contains('fixed') && e.target.classList.contains('inset-0')) e.target.classList.add('hidden'); }
     </script>
 </body>
@@ -781,206 +783,3 @@ HTML_CONTENT = """
 @app.get("/app", response_class=HTMLResponse)
 async def web_app():
     return HTMLResponse(content=HTML_CONTENT)
-
-# --- API ЗАКАЗОВ И ДОГОВОРОВ ---
-
-@app.post("/api/orders", response_model=dict)
-async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends(get_db)):
-    order_id = order_data.id
-    if not order_id:
-        dept = order_data.requesting_dept_id.strip() if order_data.requesting_dept_id else "DEP"
-        abbr = "".join([w[0] for w in dept.split()])[:3].upper() if len(dept.split())>1 else dept[:3].upper()
-        now = datetime.utcnow()
-        base_id = f"{abbr}-{now.strftime('%m.%Y')}."
-        res = await db.execute(select(OrderModel))
-        count = len(res.scalars().all())
-        order_id = base_id + str(count + 1).zfill(3)
-        while (await db.execute(select(OrderModel).filter_by(id=order_id))).scalars().first():
-            count += 1; order_id = base_id + str(count + 1).zfill(3)
-
-    new_order = OrderModel(id=order_id, enterprise=order_data.enterprise, requesting_dept_id=order_data.requesting_dept_id, executing_dept_id=order_data.executing_dept_id, priority=order_data.priority, planned_date=order_data.planned_date, comment=order_data.comment, status="Черновик")
-    for i in order_data.items: new_order.items.append(OrderItemModel(**i.model_dump()))
-    db.add(new_order)
-    await db.commit()
-    return {"status": "success"}
-
-@app.put("/api/orders/{order_id}")
-async def edit_order(order_id: str, order_data: OrderCreateSchema, db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(OrderModel).filter_by(id=order_id))
-    order = res.scalars().first()
-    if not order or order.status != "Черновик": raise HTTPException(400)
-    order.enterprise, order.requesting_dept_id, order.executing_dept_id, order.priority, order.planned_date, order.comment = order_data.enterprise, order_data.requesting_dept_id, order_data.executing_dept_id, order_data.priority, order_data.planned_date, order_data.comment
-    await db.execute(delete(OrderItemModel).where(OrderItemModel.order_id == order_id))
-    for i in order_data.items: db.add(OrderItemModel(**i.model_dump(), order_id=order_id))
-    await db.commit()
-    return {"status": "success"}
-
-@app.patch("/api/orders/{order_id}/status")
-async def update_order_status(order_id: str, payload: StatusUpdateSchema, db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(OrderModel).filter_by(id=order_id))
-    order = res.scalars().first()
-    if payload.status == 'Принят в работу' and order.status != 'Принят в работу': order.approved_at = datetime.utcnow()
-    order.status = payload.status
-    if payload.reject_comment: order.comment = f"{order.comment or ''}\n\n[ОТКАЗ]: {payload.reject_comment}"
-    await db.commit()
-    return {"status": "success"}
-
-@app.get("/api/orders")
-async def get_all_orders(db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(OrderModel).options(selectinload(OrderModel.items).selectinload(OrderItemModel.contract_items).selectinload(ContractItemModel.contract)))
-    orders = res.scalars().all()
-    out = []
-    for o in orders:
-        items_out = []
-        contracts_set = {}
-        for i in o.items:
-            c_items_out = []
-            for ci in i.contract_items:
-                c_items_out.append({"ordered_quantity": ci.ordered_quantity, "received_quantity": ci.received_quantity, "issued_quantity": ci.issued_quantity, "contract_id": ci.contract_id, "status": ci.contract.status, "supplier": ci.contract.supplier_name})
-                contracts_set[ci.contract_id] = ci.contract
-            items_out.append({"id": i.id, "material_code": i.material_code, "name": i.name, "unit": i.unit, "requested_quantity": i.requested_quantity, "allow_analog": i.allow_analog, "specification": i.specification, "tech_spec_file": i.tech_spec_file, "contract_items": c_items_out})
-        out.append({"id": o.id, "status": o.status, "enterprise": o.enterprise, "priority": o.priority, "requesting_dept_id": o.requesting_dept_id, "executing_dept_id": o.executing_dept_id, "planned_date": o.planned_date, "created_at": o.created_at.isoformat(), "approved_at": o.approved_at.isoformat() if o.approved_at else None, "comment": o.comment, "items": items_out, "contracts": [{"id": c.id, "contract_number": c.contract_number, "status": c.status, "supplier_name": c.supplier_name} for c in contracts_set.values()]})
-    return out
-
-@app.post("/api/contracts")
-async def create_contract(data: ContractCreateSchema, db: AsyncSession = Depends(get_db)):
-    total = sum(i.ordered_quantity * i.unit_price for i in data.items)
-    contract = ContractModel(supplier_name=data.supplier_name, contract_number=data.contract_number, contract_date=data.contract_date, currency=data.currency, incoterms=data.incoterms, total_amount=total)
-    affected_orders = set()
-    for i in data.items:
-        # ЗАЩИТА: Явно указываем нули, чтобы не сломать математику инвойсов
-        ci = ContractItemModel(**i.model_dump(), invoiced_quantity=0.0, received_quantity=0.0, issued_quantity=0.0)
-        contract.items.append(ci)
-        item_res = await db.execute(select(OrderItemModel).filter_by(id=i.order_item_id))
-        if o_item := item_res.scalars().first(): affected_orders.add(o_item.order_id)
-    db.add(contract)
-    await db.commit()
-    await recalculate_orders(db, affected_orders)
-    return {"status": "success"}
-
-@app.patch("/api/contracts/{c_id}/items/{ci_id}")
-async def update_contract_item(c_id: int, ci_id: int, payload: ContractItemActionSchema, db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(ContractItemModel).options(selectinload(ContractItemModel.order_item)).filter_by(id=ci_id, contract_id=c_id))
-    if not (ci := res.scalars().first()): raise HTTPException(404)
-    if payload.action == 'receive': 
-        if ci.received_quantity is None: ci.received_quantity = 0.0
-        ci.received_quantity += payload.qty
-    elif payload.action == 'issue': 
-        if ci.issued_quantity is None: ci.issued_quantity = 0.0
-        ci.issued_quantity += payload.qty
-    await db.commit()
-    await recalculate_contract(db, c_id)
-    if ci.order_item: await recalculate_orders(db, {ci.order_item.order_id})
-    return {"status": "success"}
-
-@app.patch("/api/contracts/{c_id}/status")
-async def update_contract_status(c_id: int, payload: ContractStatusUpdateSchema, db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(ContractModel).options(selectinload(ContractModel.items).selectinload(ContractItemModel.order_item)).filter_by(id=c_id))
-    if not (contract := res.scalars().first()): raise HTTPException(404)
-    affected_orders = set()
-    for ci in contract.items:
-        if payload.status == 'На складе': ci.received_quantity = ci.ordered_quantity
-        elif payload.status == 'Выполнен': ci.received_quantity, ci.issued_quantity = ci.ordered_quantity, ci.ordered_quantity
-        if ci.order_item: affected_orders.add(ci.order_item.order_id)
-    await db.commit()
-    await recalculate_contract(db, c_id)
-    await recalculate_orders(db, affected_orders)
-    return {"status": "success"}
-
-@app.get("/api/contracts")
-async def get_all_contracts(db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(ContractModel).options(selectinload(ContractModel.items).selectinload(ContractItemModel.order_item)))
-    out = []
-    for c in res.scalars().all():
-        out.append({"id": c.id, "contract_number": c.contract_number, "contract_date": c.contract_date, "supplier_name": c.supplier_name, "currency": c.currency, "incoterms": c.incoterms, "status": c.status, "total_amount": c.total_amount, "items": [{"id": ci.id, "order_item_id": ci.order_item_id, "ordered_quantity": ci.ordered_quantity, "invoiced_quantity": ci.invoiced_quantity, "received_quantity": ci.received_quantity, "issued_quantity": ci.issued_quantity, "unit_price": ci.unit_price, "order_item": {"name": ci.order_item.name, "order_id": ci.order_item.order_id} if ci.order_item else None} for ci in c.items]})
-    return out
-
-# --- НОВЫЙ API ДЛЯ ИНВОЙСОВ И ФАКТУР ---
-@app.post("/api/invoices")
-async def create_invoice(data: InvoiceCreateSchema, db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(ContractModel).options(selectinload(ContractModel.items)).filter_by(id=data.contract_id))
-    contract = res.scalars().first()
-    if not contract: raise HTTPException(404, "Договор не найден")
-
-    invoice = InvoiceModel(contract_id=contract.id, invoice_number=data.invoice_number, invoice_date=data.invoice_date)
-    total = 0.0
-
-    for i in data.items:
-        c_item = next((x for x in contract.items if x.id == i.contract_item_id), None)
-        if not c_item: continue
-        
-        sum_price = i.quantity * c_item.unit_price
-        total += sum_price
-        
-        # ЗАЩИТА: Убеждаемся, что значение не None
-        if c_item.invoiced_quantity is None: c_item.invoiced_quantity = 0.0
-        c_item.invoiced_quantity += i.quantity
-        
-        inv_item = InvoiceItemModel(contract_item_id=c_item.id, quantity=i.quantity, unit_price=c_item.unit_price, total_price=sum_price)
-        invoice.items.append(inv_item)
-
-    invoice.total_amount = total
-    db.add(invoice)
-    await db.commit()
-    return {"status": "success"}
-
-@app.post("/api/invoices/{inv_id}/factura")
-async def register_factura(inv_id: int, data: FacturaCreateSchema, db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(InvoiceModel).options(
-        selectinload(InvoiceModel.items).selectinload(InvoiceItemModel.contract_item).selectinload(ContractItemModel.order_item)
-    ).filter_by(id=inv_id))
-    invoice = res.scalars().first()
-    if not invoice or invoice.status == "Фактура получена": raise HTTPException(400)
-
-    invoice.factura_number = data.factura_number
-    invoice.factura_date = data.factura_date
-    invoice.status = "Фактура получена"
-
-    affected_orders = set()
-    contract_id = invoice.contract_id
-
-    for inv_item in invoice.items:
-        c_item = inv_item.contract_item
-        if c_item.received_quantity is None: c_item.received_quantity = 0.0
-        c_item.received_quantity += inv_item.quantity
-        if c_item.order_item: affected_orders.add(c_item.order_item.order_id)
-
-    await db.commit()
-    await recalculate_contract(db, contract_id)
-    await recalculate_orders(db, affected_orders)
-
-    return {"status": "success"}
-
-@app.get("/api/invoices")
-async def get_all_invoices(db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(InvoiceModel).options(
-        selectinload(InvoiceModel.contract),
-        selectinload(InvoiceModel.items).selectinload(InvoiceItemModel.contract_item).selectinload(ContractItemModel.order_item)
-    ))
-    invoices = res.scalars().all()
-    out = []
-    for inv in invoices:
-        out.append({
-            "id": inv.id,
-            "contract_id": inv.contract_id,
-            "invoice_number": inv.invoice_number,
-            "invoice_date": inv.invoice_date,
-            "factura_number": inv.factura_number,
-            "factura_date": inv.factura_date,
-            "status": inv.status,
-            "total_amount": inv.total_amount,
-            "contract": {
-                "contract_number": inv.contract.contract_number,
-                "supplier_name": inv.contract.supplier_name,
-                "currency": inv.contract.currency
-            } if inv.contract else None,
-            "items": [{
-                "quantity": i.quantity,
-                "unit_price": i.unit_price,
-                "total_price": i.total_price,
-                "contract_item": {
-                    "order_item": {"name": i.contract_item.order_item.name} if (i.contract_item and i.contract_item.order_item) else None
-                }
-            } for i in inv.items]
-        })
-    return out
