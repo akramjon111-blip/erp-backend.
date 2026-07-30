@@ -42,17 +42,8 @@ class OrderModel(Base):
     comment = Column(String, nullable=True)
     responsible_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
-    # ПОЛЯ ДЛЯ ДАННЫХ ОТ ПОСТАВЩИКА
-    supplier_name = Column(String, nullable=True)
-    contract_number = Column(String, nullable=True)
-    contract_date = Column(String, nullable=True)
-    currency = Column(String, nullable=True)
-    incoterms = Column(String, nullable=True)
-    ordered_quantity = Column(Float, nullable=True)
-    unit_price = Column(Float, nullable=True)
-    total_amount = Column(Float, nullable=True)
-    
     items = relationship("OrderItemModel", back_populates="order", cascade="all, delete-orphan")
+    contracts = relationship("OrderContractModel", back_populates="order", cascade="all, delete-orphan")
 
 class OrderItemModel(Base):
     __tablename__ = "order_items"
@@ -70,6 +61,21 @@ class OrderItemModel(Base):
     tech_spec_file = Column(String, nullable=True)
     comment = Column(String, nullable=True)
     order = relationship("OrderModel", back_populates="items")
+
+# НОВАЯ ТАБЛИЦА ДЛЯ ИСТОРИИ ДОГОВОРОВ
+class OrderContractModel(Base):
+    __tablename__ = "order_contracts"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    order_id = Column(String, ForeignKey("orders.id"))
+    supplier_name = Column(String, nullable=True)
+    contract_number = Column(String, nullable=True)
+    contract_date = Column(String, nullable=True)
+    currency = Column(String, nullable=True)
+    incoterms = Column(String, nullable=True)
+    ordered_quantity = Column(Float, nullable=True)
+    unit_price = Column(Float, nullable=True)
+    total_amount = Column(Float, nullable=True)
+    order = relationship("OrderModel", back_populates="contracts")
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
@@ -165,7 +171,6 @@ HTML_CONTENT = """
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Предприятие</label>
-                        <!-- Убрали required, теперь можно сохранить пустым -->
                         <select id="enterprise" class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-white">
                             <option value="" selected>Выберите предприятие...</option>
                             <option value="Завод №1 (Баку)">Завод №1 (Баку)</option>
@@ -476,7 +481,7 @@ HTML_CONTENT = """
             const footer = document.getElementById('detModalFooter');
             footer.innerHTML = `
                 <div class="w-full bg-indigo-50 p-4 rounded-lg border border-indigo-200 shadow-inner">
-                    <h4 class="font-bold text-indigo-800 mb-3 border-b border-indigo-200 pb-2">Оформление заказа у поставщика</h4>
+                    <h4 class="font-bold text-indigo-800 mb-3 border-b border-indigo-200 pb-2">Оформление договора поставки</h4>
                     <div class="grid grid-cols-2 gap-3 mb-4">
                         <div>
                             <label class="block text-xs font-semibold text-gray-700 mb-1">Поставщик</label>
@@ -515,17 +520,17 @@ HTML_CONTENT = """
                             <input type="number" id="supQty" class="w-full border border-gray-300 rounded p-1.5 text-sm font-bold text-blue-700" value="${maxQty}" oninput="calcSum(${maxQty})" required>
                         </div>
                         <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Средняя цена за ед.</label>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Ср. цена за ед.</label>
                             <input type="number" id="supPrice" step="0.01" class="w-full border border-gray-300 rounded p-1.5 text-sm" placeholder="0.00" oninput="calcSum(${maxQty})" required>
                         </div>
                         <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Общая сумма закупки</label>
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">Сумма по договору</label>
                             <input type="text" id="supTotal" class="w-full border border-indigo-200 bg-indigo-100 rounded p-1.5 text-sm font-bold text-indigo-900 outline-none" readonly value="0.00">
                         </div>
                     </div>
                     <div class="flex justify-end gap-2">
                         <button onclick="openDetail('${orderId}')" class="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">Отмена</button>
-                        <button onclick="submitSupplierOrder('${orderId}')" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow">Подтвердить закупку</button>
+                        <button onclick="submitSupplierOrder('${orderId}')" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow">Сохранить договор</button>
                     </div>
                 </div>
             `;
@@ -535,7 +540,7 @@ HTML_CONTENT = """
             const qtyInput = document.getElementById('supQty');
             let qty = parseFloat(qtyInput.value) || 0;
             if (qty > maxQty) {
-                alert('Внимание: Общее количество не может превышать исходный суммарный запрос (' + maxQty + ')!');
+                alert('Внимание: Общее количество не может превышать запрошенный остаток (' + maxQty + ')!');
                 qtyInput.value = maxQty;
                 qty = maxQty;
             }
@@ -544,21 +549,37 @@ HTML_CONTENT = """
         }
 
         function submitSupplierOrder(orderId) {
+            const order = ordersCache.find(o => o.id === orderId);
+            
+            let totalRequestedQty = 0;
+            if (order.items) { order.items.forEach(item => totalRequestedQty += item.requested_quantity); }
+            
+            let currentOrdered = 0;
+            if (order.contracts) { order.contracts.forEach(c => currentOrdered += c.ordered_quantity); }
+
+            let newQty = parseFloat(document.getElementById('supQty').value) || 0;
+            let supName = document.getElementById('supName').value.trim();
+
+            if (!supName || !document.getElementById('supContract').value.trim() || !document.getElementById('supDate').value || newQty <= 0) {
+                alert('Пожалуйста, корректно заполните все обязательные поля!');
+                return;
+            }
+
+            const isFullyOrdered = (currentOrdered + newQty) >= totalRequestedQty;
+            const nextStatus = isFullyOrdered ? 'Заказан поставщику' : 'Частично заказан';
+
             const supplierData = {
-                supplier_name: document.getElementById('supName').value.trim(),
+                supplier_name: supName,
                 contract_number: document.getElementById('supContract').value.trim(),
                 contract_date: document.getElementById('supDate').value,
                 currency: document.getElementById('supCurrency').value,
                 incoterms: document.getElementById('supInco').value,
-                ordered_quantity: parseFloat(document.getElementById('supQty').value) || 0,
+                ordered_quantity: newQty,
                 unit_price: parseFloat(document.getElementById('supPrice').value) || 0,
                 total_amount: parseFloat(document.getElementById('supTotal').value) || 0
             };
-            if (!supplierData.supplier_name || !supplierData.contract_number || !supplierData.contract_date || !supplierData.unit_price) {
-                alert('Пожалуйста, заполните все обязательные поля поставщика!');
-                return;
-            }
-            changeStatus(orderId, 'Заказан поставщику', null, supplierData);
+            
+            changeStatus(orderId, nextStatus, null, supplierData);
         }
 
         async function loadApp() {
@@ -583,14 +604,17 @@ HTML_CONTENT = """
                     let statusColor = 'bg-blue-100 text-blue-700';
                     if (order.status === 'На согласовании') statusColor = 'bg-yellow-100 text-yellow-700';
                     if (order.status === 'Принят в работу') statusColor = 'bg-purple-100 text-purple-700';
+                    if (order.status === 'Частично заказан') statusColor = 'bg-cyan-100 text-cyan-700';
                     if (order.status === 'Заказан поставщику') statusColor = 'bg-indigo-100 text-indigo-700';
                     if (order.status === 'На складе') statusColor = 'bg-orange-100 text-orange-700';
                     if (order.status === 'Выполнен') statusColor = 'bg-green-100 text-green-700';
 
                     let itemsHtml = '';
+                    let totalRequestedQty = 0;
                     if (order.items && order.items.length > 0) {
                         itemsHtml = '<div class="mt-3 pt-3 border-t border-gray-100 space-y-2">';
                         order.items.forEach((item, index) => {
+                            totalRequestedQty += item.requested_quantity;
                             let tzText = item.tech_spec_file && item.tech_spec_file !== '-' && item.tech_spec_file !== 'Не прикреплен' 
                                 ? `<span class="ml-2 text-xs text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">📎 ТЗ: ${item.tech_spec_file}</span>` : '';
 
@@ -609,6 +633,16 @@ HTML_CONTENT = """
                         });
                         itemsHtml += '</div>';
                     }
+                    
+                    let currentOrdered = 0;
+                    if (order.contracts) {
+                        order.contracts.forEach(c => currentOrdered += c.ordered_quantity);
+                    }
+                    let orderProgress = '';
+                    if (order.status !== 'Черновик' && order.status !== 'На согласовании') {
+                        let isFull = currentOrdered >= totalRequestedQty;
+                        orderProgress = `<span class="ml-2 px-1.5 py-0.5 text-xs rounded font-bold ${isFull ? 'bg-green-100 text-green-700' : 'bg-cyan-100 text-cyan-700'}">Заказано: ${currentOrdered}/${totalRequestedQty}</span>`;
+                    }
 
                     let createdStr = order.created_at ? new Date(order.created_at).toLocaleDateString() : '';
                     let approvedStr = order.approved_at ? `<span class="ml-2 text-purple-600">✓ Утв: ${new Date(order.approved_at).toLocaleDateString()}</span>` : '';
@@ -625,9 +659,10 @@ HTML_CONTENT = """
                                 </div>
                                 <span class="text-xs font-bold px-2.5 py-1 rounded-full ${statusColor}">${order.status}</span>
                             </div>
-                            <div class="text-xs text-gray-600 flex gap-4 flex-wrap mb-2">
+                            <div class="text-xs text-gray-600 flex gap-4 flex-wrap mb-2 items-center">
                                 ${order.planned_date ? `<span>📅 Необходимая дата: <b class="text-red-600">${order.planned_date}</b></span>` : ''}
                                 <span>🕒 Создан: ${createdStr} ${approvedStr}</span>
+                                ${orderProgress}
                             </div>
                             ${order.comment ? `<div class="text-xs text-gray-500 italic mb-2 whitespace-pre-wrap">💬 "${order.comment}"</div>` : ''}
                             ${itemsHtml}
@@ -647,12 +682,19 @@ HTML_CONTENT = """
 
             let totalRequestedQty = 0;
             if (order.items) { order.items.forEach(item => totalRequestedQty += item.requested_quantity); }
+            
+            let currentOrdered = 0;
+            if (order.contracts) { order.contracts.forEach(c => currentOrdered += c.ordered_quantity); }
+            
+            let remaining = totalRequestedQty - currentOrdered;
+            if (remaining < 0) remaining = 0;
 
             document.getElementById('detModalTitle').innerText = `Детали заказа #${order.id}`;
             
             let statusBadge = `<span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold">${order.status}</span>`;
             if (order.status === 'На согласовании') statusBadge = `<span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded font-semibold">${order.status}</span>`;
             if (order.status === 'Принят в работу') statusBadge = `<span class="px-2 py-0.5 bg-purple-100 text-purple-700 rounded font-semibold">${order.status}</span>`;
+            if (order.status === 'Частично заказан') statusBadge = `<span class="px-2 py-0.5 bg-cyan-100 text-cyan-700 rounded font-semibold">${order.status}</span>`;
             if (order.status === 'Заказан поставщику') statusBadge = `<span class="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded font-semibold">${order.status}</span>`;
             if (order.status === 'На складе') statusBadge = `<span class="px-2 py-0.5 bg-orange-100 text-orange-700 rounded font-semibold">${order.status}</span>`;
             if (order.status === 'Выполнен') statusBadge = `<span class="px-2 py-0.5 bg-green-100 text-green-700 rounded font-semibold">${order.status}</span>`;
@@ -683,21 +725,26 @@ HTML_CONTENT = """
             }
 
             let supplierInfoHtml = '';
-            if (order.status === 'Заказан поставщику' || order.status === 'На складе' || order.status === 'Выполнен') {
-                if (order.supplier_name) {
-                    supplierInfoHtml = `
-                        <hr class="my-3">
-                        <h4 class="font-bold text-indigo-800">Данные закупки:</h4>
-                        <div class="bg-indigo-50 p-3 rounded-lg border border-indigo-200 text-sm space-y-1 mt-2">
-                            <p><b>Поставщик:</b> ${order.supplier_name}</p>
-                            <p><b>Договор:</b> №${order.contract_number} от ${order.contract_date}</p>
-                            <p><b>Условия:</b> Инкотермс ${order.incoterms}, Валюта ${order.currency}</p>
-                            <p><b>Фактически заказано:</b> <span class="text-indigo-700 font-bold">${order.ordered_quantity} ед. (из ${totalRequestedQty})</span></p>
-                            <p><b>Ср. цена за ед.:</b> ${order.unit_price} ${order.currency}</p>
-                            <p class="pt-1 border-t border-indigo-200 mt-1"><b>Общая сумма:</b> <span class="font-bold text-lg">${order.total_amount} ${order.currency}</span></p>
+            if (order.contracts && order.contracts.length > 0) {
+                supplierInfoHtml = `
+                    <hr class="my-3">
+                    <h4 class="font-bold text-indigo-800">Договоры закупки (${order.contracts.length}):</h4>
+                    <div class="space-y-2 mt-2">
+                `;
+                order.contracts.forEach((c, i) => {
+                    supplierInfoHtml += `
+                        <div class="bg-indigo-50 p-3 rounded-lg border border-indigo-200 text-sm space-y-1 relative">
+                            <span class="absolute top-2 right-2 text-xs font-bold text-indigo-400">Договор ${i+1}</span>
+                            <p><b>Поставщик:</b> ${c.supplier_name}</p>
+                            <p><b>Договор:</b> №${c.contract_number} от ${c.contract_date}</p>
+                            <p><b>Условия:</b> Инкотермс ${c.incoterms}, Валюта ${c.currency}</p>
+                            <p><b>Заказано по договору:</b> <span class="text-indigo-700 font-bold">${c.ordered_quantity} ед.</span></p>
+                            <p><b>Цена за ед.:</b> ${c.unit_price} ${c.currency}</p>
+                            <p class="pt-1 border-t border-indigo-200 mt-1"><b>Сумма:</b> <span class="font-bold text-lg">${c.total_amount} ${c.currency}</span></p>
                         </div>
                     `;
-                }
+                });
+                supplierInfoHtml += `</div>`;
             }
 
             document.getElementById('detModalBody').innerHTML = `
@@ -716,8 +763,11 @@ HTML_CONTENT = """
                     ${order.comment ? `<div class="mt-2 text-red-600"><b>Комментарий/История:</b><div class="whitespace-pre-wrap text-sm border-l-2 border-red-400 pl-2 mt-1 bg-red-50 py-1 pr-1">${order.comment}</div></div>` : ''}
                     
                     <hr class="my-2">
-                    <h4 class="font-bold text-gray-800">Запрошенные позиции:</h4>
-                    <div class="space-y-2">
+                    <div class="flex justify-between items-center">
+                        <h4 class="font-bold text-gray-800">Запрошенные позиции:</h4>
+                        <span class="text-xs font-bold text-gray-600 bg-gray-200 px-2 py-0.5 rounded">Заказано: ${currentOrdered} из ${totalRequestedQty}</span>
+                    </div>
+                    <div class="space-y-2 mt-2">
                         ${itemsDetails}
                     </div>
                     ${supplierInfoHtml}
@@ -740,8 +790,14 @@ HTML_CONTENT = """
                 `;
                 rightActionButtons += `<button onclick="rejectOrder('${order.id}')" class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 shadow">❌ Отказать</button>`;
                 rightActionButtons += `<button onclick="changeStatus('${order.id}', 'Принят в работу')" class="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 shadow">✅ Утвердить (В работу)</button>`;
-            } else if (order.status === 'Принят в работу') {
-                rightActionButtons += `<button onclick="showSupplierForm('${order.id}', ${totalRequestedQty})" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow">🛒 Сделать заказ поставщику</button>`;
+            } else if (order.status === 'Принят в работу' || order.status === 'Частично заказан') {
+                if (remaining > 0) {
+                    rightActionButtons += `<button onclick="showSupplierForm('${order.id}', ${remaining})" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow">🛒 Добавить договор (осталось ${remaining})</button>`;
+                }
+                if (currentOrdered > 0 && remaining > 0) {
+                    // Если решили больше не докупать остаток
+                    rightActionButtons += `<button onclick="changeStatus('${order.id}', 'Заказан поставщику')" class="px-4 py-2 text-sm font-medium text-white bg-gray-600 rounded-lg hover:bg-gray-700 shadow" title="Перейти к приемке на склад, отменив остаток">⏩ Завершить закупку досрочно</button>`;
+                }
             } else if (order.status === 'Заказан поставщику') {
                 rightActionButtons += `<button onclick="changeStatus('${order.id}', 'На складе')" class="px-4 py-2 text-sm font-medium text-white bg-orange-500 rounded-lg hover:bg-orange-600 shadow">📦 Принять на склад</button>`;
             } else if (order.status === 'На складе') {
@@ -863,21 +919,30 @@ async def update_order_status(order_id: str, payload: OrderStatusUpdateSchema, d
         separator = "\n\n" if existing_comment else ""
         order.comment = f"{existing_comment}{separator}[ОТКАЗ]: {payload.reject_comment}"
 
-    if payload.supplier_name: order.supplier_name = payload.supplier_name
-    if payload.contract_number: order.contract_number = payload.contract_number
-    if payload.contract_date: order.contract_date = payload.contract_date
-    if payload.currency: order.currency = payload.currency
-    if payload.incoterms: order.incoterms = payload.incoterms
-    if payload.ordered_quantity is not None: order.ordered_quantity = payload.ordered_quantity
-    if payload.unit_price is not None: order.unit_price = payload.unit_price
-    if payload.total_amount is not None: order.total_amount = payload.total_amount
+    # Добавление нового контракта в историю
+    if payload.supplier_name:
+        new_contract = OrderContractModel(
+            order_id=order_id,
+            supplier_name=payload.supplier_name,
+            contract_number=payload.contract_number,
+            contract_date=payload.contract_date,
+            currency=payload.currency,
+            incoterms=payload.incoterms,
+            ordered_quantity=payload.ordered_quantity,
+            unit_price=payload.unit_price,
+            total_amount=payload.total_amount
+        )
+        db.add(new_contract)
 
     await db.commit()
     return {"status": "success", "new_status": order.status}
 
 @app.get("/api/orders", response_model=List[dict])
 async def get_all_orders(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(OrderModel).options(selectinload(OrderModel.items)))
+    result = await db.execute(select(OrderModel).options(
+        selectinload(OrderModel.items),
+        selectinload(OrderModel.contracts)
+    ))
     orders = result.scalars().all()
     
     response_data = []
@@ -893,14 +958,18 @@ async def get_all_orders(db: AsyncSession = Depends(get_db)):
             "priority": order.priority,
             "planned_date": order.planned_date,
             "comment": order.comment,
-            "supplier_name": order.supplier_name,
-            "contract_number": order.contract_number,
-            "contract_date": order.contract_date,
-            "currency": order.currency,
-            "incoterms": order.incoterms,
-            "ordered_quantity": order.ordered_quantity,
-            "unit_price": order.unit_price,
-            "total_amount": order.total_amount,
+            "contracts": [
+                {
+                    "supplier_name": c.supplier_name,
+                    "contract_number": c.contract_number,
+                    "contract_date": c.contract_date,
+                    "currency": c.currency,
+                    "incoterms": c.incoterms,
+                    "ordered_quantity": c.ordered_quantity,
+                    "unit_price": c.unit_price,
+                    "total_amount": c.total_amount
+                } for c in order.contracts
+            ],
             "items": [
                 {
                     "material_code": item.material_code,
