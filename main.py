@@ -13,7 +13,6 @@ from typing import List, Optional
 # --- КОНФИГУРАЦИЯ ---
 SECRET_KEY = "super_secret_key_change_me"
 ALGORITHM = "HS256"
-# ВАЖНО: Новое имя БД, чтобы сбросить старые кэши и ошибки таблиц!
 DATABASE_URL = "sqlite+aiosqlite:///./erp_orders_v3.db"
 
 # --- БАЗА ДАННЫХ ---
@@ -313,7 +312,6 @@ HTML_CONTENT = """
         let contractsCache = [];
         let editingOrderId = null;
 
-        // --- УПРАВЛЕНИЕ ВКЛАДКАМИ ---
         function switchTab(tab) {
             currentTab = tab;
             document.getElementById('tabOrders').className = `px-4 py-3 font-bold transition border-b-2 ${tab === 'orders' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`;
@@ -367,6 +365,7 @@ HTML_CONTENT = """
                     <button type="button" onclick="this.parentElement.remove()" class="text-red-500">✕</button>
                    </div>` : '';
 
+            // ВАЖНО: Добавлен step="any" чтобы не ломалась валидация HTML!
             row.innerHTML = `
                 <button type="button" onclick="this.closest('.item-row').remove()" class="absolute top-2 right-2 text-red-500 text-xs font-bold px-2 py-0.5 border border-red-200 bg-white rounded shadow-sm">✕ Удалить</button>
                 <div class="grid grid-cols-3 gap-2 mb-2 pr-20">
@@ -374,7 +373,7 @@ HTML_CONTENT = """
                     <div class="col-span-2"><label class="text-xs">Наименование</label><input type="text" class="i-name w-full border rounded p-1.5 text-xs" required value="${data?.name || ''}"></div>
                 </div>
                 <div class="grid grid-cols-3 gap-2 mb-2">
-                    <div><label class="text-xs">Кол-во</label><input type="number" class="i-qty w-full border rounded p-1.5 text-xs" required min="0.01" value="${data?.requested_quantity || 1}"></div>
+                    <div><label class="text-xs">Кол-во</label><input type="number" step="any" class="i-qty w-full border rounded p-1.5 text-xs" required min="0.01" value="${data?.requested_quantity || 1}"></div>
                     <div><label class="text-xs">Ед. изм.</label><input type="text" class="i-unit w-full border rounded p-1.5 text-xs" required value="${data?.unit || 'шт'}"></div>
                     <div><label class="text-xs">Аналог</label><select class="i-analog w-full border rounded p-1.5 text-xs"><option value="true" ${data?.allow_analog===true?'selected':''}>Да</option><option value="false" ${data?.allow_analog===false?'selected':''}>Нет</option></select></div>
                 </div>
@@ -520,7 +519,6 @@ HTML_CONTENT = """
             });
             html += '</div>';
 
-            // Если есть договоры, покажем их сводку
             if(o.contracts && o.contracts.length > 0) {
                 html += '<h4 class="font-bold mt-4 mb-2">Связанные договоры:</h4><div class="space-y-2">';
                 o.contracts.forEach(c => {
@@ -616,6 +614,7 @@ HTML_CONTENT = """
             const name = opt.getAttribute('data-name');
             const ord = opt.getAttribute('data-order');
 
+            // ВАЖНО: Добавлен step="any" чтобы не ломалась HTML5 валидация!
             const div = document.createElement('div');
             div.className = `c-row bg-white border border-indigo-200 p-2 rounded flex gap-2 items-center text-sm`;
             div.setAttribute('data-iid', iid);
@@ -623,7 +622,7 @@ HTML_CONTENT = """
                 <div class="flex-1 font-bold text-gray-700 bg-gray-100 px-2 py-1 rounded">${ord} <span class="font-normal">| ${name}</span></div>
                 <div>
                     <span class="text-xs text-gray-500 block mb-0.5">Кол-во (макс ${max})</span>
-                    <input type="number" class="cr-qty w-20 border border-gray-300 rounded p-1" value="${max}" max="${max}" oninput="calcContractTotal()" required>
+                    <input type="number" step="any" min="0.01" class="cr-qty w-20 border border-gray-300 rounded p-1" value="${max}" max="${max}" oninput="calcContractTotal()" required>
                 </div>
                 <div>
                     <span class="text-xs text-gray-500 block mb-0.5">Цена/шт</span>
@@ -758,6 +757,12 @@ HTML_CONTENT = """
 
         // Запуск при загрузке страницы
         switchTab('orders');
+        // Окно можно закрывать кликом вне него (не обязательно, но удобно)
+        window.onclick = function(e) {
+            if(e.target.classList.contains('fixed') && e.target.classList.contains('inset-0')){
+                e.target.classList.add('hidden');
+            }
+        }
     </script>
 </body>
 </html>
@@ -794,7 +799,7 @@ async def recalculate_orders(db: AsyncSession, order_ids: set):
             order.status = "Принят в работу"
         elif total_ord < total_req:
             order.status = "В процессе закупки"
-        else: # Все объемы покрыты
+        else: 
             if all_contracts_done: order.status = "Выполнен"
             elif all_contracts_stocked_or_done: order.status = "На складе"
             else: order.status = "Заказан поставщику"
