@@ -13,8 +13,8 @@ from typing import List, Optional
 # --- КОНФИГУРАЦИЯ ---
 SECRET_KEY = "super_secret_key_change_me"
 ALGORITHM = "HS256"
-# ВАЖНО: Новая база данных V5 (с инвойсами и фактурами)
-DATABASE_URL = "sqlite+aiosqlite:///./erp_orders_v5.db"
+# ВАЖНО: База данных V6 (защита от NoneType ошибок в математике)
+DATABASE_URL = "sqlite+aiosqlite:///./erp_orders_v6.db"
 
 # --- БАЗА ДАННЫХ ---
 Base = declarative_base()
@@ -41,8 +41,8 @@ class OrderItemModel(Base):
     material_code = Column(String, index=True)
     name = Column(String)
     unit = Column(String)
-    requested_quantity = Column(Float)
-    stock_balance = Column(Float, default=0)
+    requested_quantity = Column(Float, default=0.0)
+    stock_balance = Column(Float, default=0.0)
     allow_analog = Column(Boolean, default=True)
     specification = Column(String, nullable=True) 
     tech_spec_file = Column(String, nullable=True)
@@ -60,7 +60,7 @@ class ContractModel(Base):
     currency = Column(String)
     incoterms = Column(String)
     status = Column(String, default="Заказан поставщику")
-    total_amount = Column(Float, default=0)
+    total_amount = Column(Float, default=0.0)
     
     items = relationship("ContractItemModel", back_populates="contract", cascade="all, delete-orphan")
     invoices = relationship("InvoiceModel", back_populates="contract", cascade="all, delete-orphan")
@@ -71,17 +71,16 @@ class ContractItemModel(Base):
     contract_id = Column(Integer, ForeignKey("contracts.id"))
     order_item_id = Column(Integer, ForeignKey("order_items.id"))
     
-    ordered_quantity = Column(Float)
-    invoiced_quantity = Column(Float, default=0.0) # Новое поле: выставлено в инвойсах
+    ordered_quantity = Column(Float, default=0.0)
+    invoiced_quantity = Column(Float, default=0.0) 
     received_quantity = Column(Float, default=0.0)
     issued_quantity = Column(Float, default=0.0)
-    unit_price = Column(Float)
+    unit_price = Column(Float, default=0.0)
     
     contract = relationship("ContractModel", back_populates="items")
     order_item = relationship("OrderItemModel", back_populates="contract_items")
     invoice_items = relationship("InvoiceItemModel", back_populates="contract_item", cascade="all, delete-orphan")
 
-# --- НОВЫЕ ТАБЛИЦЫ ДЛЯ ИНВОЙСОВ И ФАКТУР ---
 class InvoiceModel(Base):
     __tablename__ = "invoices"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -89,11 +88,10 @@ class InvoiceModel(Base):
     invoice_number = Column(String)
     invoice_date = Column(String)
     
-    # Данные фактуры (прихода)
     factura_number = Column(String, nullable=True)
     factura_date = Column(String, nullable=True)
     
-    status = Column(String, default="Ожидает поставки") # -> "Фактура получена"
+    status = Column(String, default="Ожидает поставки")
     total_amount = Column(Float, default=0.0)
     
     contract = relationship("ContractModel", back_populates="invoices")
@@ -105,9 +103,9 @@ class InvoiceItemModel(Base):
     invoice_id = Column(Integer, ForeignKey("invoices.id"))
     contract_item_id = Column(Integer, ForeignKey("contract_items.id"))
     
-    quantity = Column(Float)
-    unit_price = Column(Float)
-    total_price = Column(Float)
+    quantity = Column(Float, default=0.0)
+    unit_price = Column(Float, default=0.0)
+    total_price = Column(Float, default=0.0)
     
     invoice = relationship("InvoiceModel", back_populates="items")
     contract_item = relationship("ContractItemModel", back_populates="invoice_items")
@@ -156,7 +154,6 @@ class ContractItemActionSchema(BaseModel):
     action: str 
     qty: float
 
-# Схемы для Инвойсов
 class InvoiceItemSchema(BaseModel):
     contract_item_id: int
     quantity: float
@@ -191,7 +188,7 @@ async def startup_event():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-# --- УТИЛИТА: ПЕРЕСЧЕТ СТАТУСОВ ---
+# --- УТИЛИТЫ ---
 async def recalculate_orders(db: AsyncSession, order_ids: set):
     for oid in order_ids:
         res = await db.execute(select(OrderModel).options(
@@ -207,9 +204,9 @@ async def recalculate_orders(db: AsyncSession, order_ids: set):
 
         for item in order.items:
             for ci in item.contract_items:
-                total_ord += ci.ordered_quantity
-                total_rec += ci.received_quantity
-                total_iss += ci.issued_quantity
+                total_ord += (ci.ordered_quantity or 0.0)
+                total_rec += (ci.received_quantity or 0.0)
+                total_iss += (ci.issued_quantity or 0.0)
 
         if total_req == 0: continue
 
@@ -228,9 +225,9 @@ async def recalculate_contract(db: AsyncSession, contract_id: int):
     contract = res.scalars().first()
     if not contract: return
 
-    tot_ord = sum(i.ordered_quantity for i in contract.items)
-    tot_rec = sum(i.received_quantity for i in contract.items)
-    tot_iss = sum(i.issued_quantity for i in contract.items)
+    tot_ord = sum((i.ordered_quantity or 0.0) for i in contract.items)
+    tot_rec = sum((i.received_quantity or 0.0) for i in contract.items)
+    tot_iss = sum((i.issued_quantity or 0.0) for i in contract.items)
 
     if tot_iss >= tot_ord: contract.status = "Выполнен"
     elif tot_rec >= tot_ord: contract.status = "На складе"
@@ -268,7 +265,6 @@ HTML_CONTENT = """
         <div class="flex items-center justify-center h-full"><p class="text-gray-500 text-center">Загрузка...</p></div>
     </main>
 
-    <!-- ВСЕ МОДАЛКИ (Скрыты по умолчанию) -->
     <!-- Заказ: Создание -->
     <div id="orderModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
         <div class="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -376,7 +372,7 @@ HTML_CONTENT = """
         </div>
     </div>
 
-    <!-- ФАКТУРА: Регистрация (Приход) -->
+    <!-- ФАКТУРА: Регистрация -->
     <div id="facturaModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
         <div class="bg-white p-6 rounded-xl w-full max-w-sm shadow-2xl">
             <h2 class="text-lg font-bold mb-4 text-orange-700">Регистрация Фактуры</h2>
@@ -502,7 +498,7 @@ HTML_CONTENT = """
                 if(o.status==='Выполнен') sColor='bg-green-100 text-green-700';
 
                 let reqTotal=0, ordTotal=0, recTotal=0;
-                o.items.forEach(i => { reqTotal+=i.requested_quantity; if(i.contract_items) i.contract_items.forEach(ci => { ordTotal+=ci.ordered_quantity; recTotal+=ci.received_quantity; }); });
+                o.items.forEach(i => { reqTotal+=i.requested_quantity; if(i.contract_items) i.contract_items.forEach(ci => { ordTotal+=(ci.ordered_quantity||0); recTotal+=(ci.received_quantity||0); }); });
                 let progress = o.status!=='Черновик'&&o.status!=='На согласовании' ? `<span class="ml-2 text-xs font-bold px-1.5 py-0.5 rounded ${ordTotal>=reqTotal?'bg-green-100 text-green-700':'bg-blue-100 text-blue-700'}">Заказано: ${ordTotal}/${reqTotal}</span>` : '';
                 let recBadge = recTotal > 0 && o.status!=='Выполнен' ? `<span class="ml-1 text-xs font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">На складе: ${recTotal}</span>` : '';
 
@@ -519,7 +515,7 @@ HTML_CONTENT = """
             
             o.items.forEach(i => {
                 let ordered=0, received=0, issued=0;
-                if(i.contract_items) i.contract_items.forEach(ci => { ordered+=ci.ordered_quantity; received+=ci.received_quantity; issued+=ci.issued_quantity; });
+                if(i.contract_items) i.contract_items.forEach(ci => { ordered+=(ci.ordered_quantity||0); received+=(ci.received_quantity||0); issued+=(ci.issued_quantity||0); });
                 let c_info = ordered > 0 ? `<div class="text-xs mt-1 text-gray-600 bg-gray-100 p-1.5 rounded">Заказано: <b class="text-indigo-700">${ordered}</b> | На складе: <b class="text-orange-600">${received}</b> | Выдано: <b class="text-green-700">${issued}</b></div>` : '<div class="text-gray-400 italic text-xs mt-1">Ждет закупки</div>';
                 html += `<div class="border p-2 rounded bg-gray-50 text-sm relative"><div class="flex justify-between font-bold text-gray-800"><span>${i.name} <span class="text-gray-400 font-normal">(${i.material_code})</span></span><span>Запрос: ${i.requested_quantity} ${i.unit}</span></div>${c_info}</div>`;
             });
@@ -548,7 +544,7 @@ HTML_CONTENT = """
                 if(o.status === 'Черновик' || o.status === 'На согласовании') return;
                 o.items.forEach(i => {
                     let ord = 0;
-                    if(i.contract_items) i.contract_items.forEach(c => ord += c.ordered_quantity);
+                    if(i.contract_items) i.contract_items.forEach(c => ord += (c.ordered_quantity||0));
                     let rem = i.requested_quantity - ord;
                     if(rem > 0) opts += `<option value="${i.id}" data-max="${rem}" data-name="${i.name}" data-order="${o.id}">Заказ ${o.id} | ${i.name} (Нужно: ${rem})</option>`;
                 });
@@ -612,11 +608,11 @@ HTML_CONTENT = """
             
             let canIssueAll = false;
             c.items.forEach(ci => {
-                let remIss = ci.received_quantity - ci.issued_quantity;
+                let remIss = (ci.received_quantity||0) - (ci.issued_quantity||0);
                 if (remIss > 0) canIssueAll = true;
                 let issBtn = remIss > 0 ? `<button onclick="procContractItem(${c.id}, ${ci.id}, 'issue', ${remIss})" class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded hover:bg-green-200 font-bold border border-green-200 shadow-sm transition">✅ Выдать инициатору (макс ${remIss})</button>` : '';
 
-                html += `<div class="border border-gray-200 p-3 rounded-lg bg-gray-50 flex flex-col gap-2"><div class="flex justify-between items-start"><div><span class="text-xs font-bold bg-white border px-1.5 py-0.5 rounded mr-1">Заказ #${ci.order_item.order_id}</span><span class="font-bold text-gray-800 text-sm">${ci.order_item.name}</span></div></div><div class="flex gap-4 text-xs mt-1 bg-white p-2 rounded border border-gray-100 shadow-inner"><div class="text-center"><div class="text-gray-400 mb-0.5">В договоре</div><b class="text-indigo-700 text-sm">${ci.ordered_quantity}</b></div><div class="text-center"><div class="text-gray-400 mb-0.5">Принято (Инвойсы)</div><b class="text-orange-600 text-sm">${ci.received_quantity}</b></div><div class="text-center"><div class="text-gray-400 mb-0.5">Выдано</div><b class="text-green-700 text-sm">${ci.issued_quantity}</b></div></div><div class="flex gap-2 justify-end mt-1">${issBtn}</div></div>`;
+                html += `<div class="border border-gray-200 p-3 rounded-lg bg-gray-50 flex flex-col gap-2"><div class="flex justify-between items-start"><div><span class="text-xs font-bold bg-white border px-1.5 py-0.5 rounded mr-1">Заказ #${ci.order_item?.order_id || '?'}</span><span class="font-bold text-gray-800 text-sm">${ci.order_item?.name || 'Товар'}</span></div></div><div class="flex gap-4 text-xs mt-1 bg-white p-2 rounded border border-gray-100 shadow-inner"><div class="text-center"><div class="text-gray-400 mb-0.5">В договоре</div><b class="text-indigo-700 text-sm">${ci.ordered_quantity}</b></div><div class="text-center"><div class="text-gray-400 mb-0.5">По Инвойсам</div><b class="text-teal-600 text-sm">${ci.invoiced_quantity||0}</b></div><div class="text-center"><div class="text-gray-400 mb-0.5">На складе</div><b class="text-orange-600 text-sm">${ci.received_quantity||0}</b></div><div class="text-center"><div class="text-gray-400 mb-0.5">Выдано</div><b class="text-green-700 text-sm">${ci.issued_quantity||0}</b></div></div><div class="flex gap-2 justify-end mt-1">${issBtn}</div></div>`;
             });
             html += '</div>';
             document.getElementById('conDetBody').innerHTML = html;
@@ -648,9 +644,11 @@ HTML_CONTENT = """
             
             let opts = '<option value="" disabled selected>Выберите Договор...</option>';
             contractsCache.forEach(c => {
-                // Если договор еще не выполнен полностью по инвойсам
                 let isFullyInvoiced = true;
-                c.items.forEach(i => { if (i.ordered_quantity > i.invoiced_quantity) isFullyInvoiced = false; });
+                c.items.forEach(i => {
+                    let invQ = i.invoiced_quantity || 0;
+                    if (i.ordered_quantity > invQ) isFullyInvoiced = false;
+                });
                 if(!isFullyInvoiced) opts += `<option value="${c.id}" data-cur="${c.currency}">Договор №${c.contract_number} (${c.supplier_name})</option>`;
             });
             document.getElementById('invContract').innerHTML = opts;
@@ -662,16 +660,18 @@ HTML_CONTENT = """
             const c = contractsCache.find(x => x.id === cId);
             const container = document.getElementById('invRowsContainer');
             container.innerHTML = '';
+            if(!c) return;
             document.getElementById('invTotal').innerText = '0.00 ' + c.currency;
 
             c.items.forEach(ci => {
-                let rem = ci.ordered_quantity - ci.invoiced_quantity;
+                let invQ = ci.invoiced_quantity || 0;
+                let rem = ci.ordered_quantity - invQ;
                 if (rem > 0) {
                     const div = document.createElement('div');
                     div.className = 'inv-row bg-white border border-teal-200 p-2 rounded flex gap-2 items-center text-sm shadow-sm';
                     div.setAttribute('data-ciid', ci.id);
                     div.innerHTML = `
-                        <div class="flex-1 font-bold text-gray-700">${ci.order_item.name} <span class="font-normal text-xs text-gray-400">(${ci.unit_price} ${c.currency})</span></div>
+                        <div class="flex-1 font-bold text-gray-700">${ci.order_item?.name || 'Товар'} <span class="font-normal text-xs text-gray-400">(${ci.unit_price} ${c.currency})</span></div>
                         <div>
                             <span class="text-xs text-gray-500 block mb-0.5">Кол-во (макс ${rem})</span>
                             <input type="number" step="any" min="0" max="${rem}" class="invr-qty w-20 border rounded p-1 text-teal-700 font-bold" value="${rem}" data-price="${ci.unit_price}" oninput="calcInvTotal()">
@@ -739,12 +739,12 @@ HTML_CONTENT = """
                             <h3 class="font-bold text-teal-900 text-lg">Инвойс №${inv.invoice_number}</h3>
                             <span class="text-xs font-bold px-2 py-1 rounded ${sColor}">${inv.status}</span>
                         </div>
-                        <p class="text-sm text-gray-600">Дата: <b>${inv.invoice_date}</b> | По договору: <b class="text-indigo-700">№${c.contract_number}</b> (${c.supplier_name})</p>
+                        <p class="text-sm text-gray-600">Дата: <b>${inv.invoice_date}</b> | По договору: <b class="text-indigo-700">№${c?.contract_number||'?'}</b> (${c?.supplier_name||'?'})</p>
                         <div class="bg-gray-50 p-2 mt-2 rounded border text-sm">
                             <ul class="list-disc pl-5 mb-2 text-xs text-gray-700">
-                                ${inv.items.map(i => `<li>${i.contract_item.order_item.name} — <b>${i.quantity} шт.</b> (${i.total_price} ${c.currency})</li>`).join('')}
+                                ${inv.items.map(i => `<li>${i.contract_item?.order_item?.name || 'Товар'} — <b>${i.quantity} шт.</b> (${i.total_price} ${c?.currency||''})</li>`).join('')}
                             </ul>
-                            <div class="text-right font-bold text-teal-800 pt-1 border-t">ИТОГО: ${inv.total_amount} ${c.currency}</div>
+                            <div class="text-right font-bold text-teal-800 pt-1 border-t">ИТОГО: ${inv.total_amount} ${c?.currency||''}</div>
                         </div>
                         ${facInfo}
                         ${facBtn}
@@ -782,7 +782,7 @@ HTML_CONTENT = """
 async def web_app():
     return HTMLResponse(content=HTML_CONTENT)
 
-# --- API ЗАКАЗОВ И ДОГОВОРОВ (Как было, плюс доп. поля) ---
+# --- API ЗАКАЗОВ И ДОГОВОРОВ ---
 
 @app.post("/api/orders", response_model=dict)
 async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends(get_db)):
@@ -848,7 +848,8 @@ async def create_contract(data: ContractCreateSchema, db: AsyncSession = Depends
     contract = ContractModel(supplier_name=data.supplier_name, contract_number=data.contract_number, contract_date=data.contract_date, currency=data.currency, incoterms=data.incoterms, total_amount=total)
     affected_orders = set()
     for i in data.items:
-        ci = ContractItemModel(**i.model_dump())
+        # ЗАЩИТА: Явно указываем нули, чтобы не сломать математику инвойсов
+        ci = ContractItemModel(**i.model_dump(), invoiced_quantity=0.0, received_quantity=0.0, issued_quantity=0.0)
         contract.items.append(ci)
         item_res = await db.execute(select(OrderItemModel).filter_by(id=i.order_item_id))
         if o_item := item_res.scalars().first(): affected_orders.add(o_item.order_id)
@@ -861,8 +862,12 @@ async def create_contract(data: ContractCreateSchema, db: AsyncSession = Depends
 async def update_contract_item(c_id: int, ci_id: int, payload: ContractItemActionSchema, db: AsyncSession = Depends(get_db)):
     res = await db.execute(select(ContractItemModel).options(selectinload(ContractItemModel.order_item)).filter_by(id=ci_id, contract_id=c_id))
     if not (ci := res.scalars().first()): raise HTTPException(404)
-    if payload.action == 'receive': ci.received_quantity += payload.qty
-    elif payload.action == 'issue': ci.issued_quantity += payload.qty
+    if payload.action == 'receive': 
+        if ci.received_quantity is None: ci.received_quantity = 0.0
+        ci.received_quantity += payload.qty
+    elif payload.action == 'issue': 
+        if ci.issued_quantity is None: ci.issued_quantity = 0.0
+        ci.issued_quantity += payload.qty
     await db.commit()
     await recalculate_contract(db, c_id)
     if ci.order_item: await recalculate_orders(db, {ci.order_item.order_id})
@@ -893,7 +898,6 @@ async def get_all_contracts(db: AsyncSession = Depends(get_db)):
 # --- НОВЫЙ API ДЛЯ ИНВОЙСОВ И ФАКТУР ---
 @app.post("/api/invoices")
 async def create_invoice(data: InvoiceCreateSchema, db: AsyncSession = Depends(get_db)):
-    # Подтягиваем договор и позиции
     res = await db.execute(select(ContractModel).options(selectinload(ContractModel.items)).filter_by(id=data.contract_id))
     contract = res.scalars().first()
     if not contract: raise HTTPException(404, "Договор не найден")
@@ -908,7 +912,8 @@ async def create_invoice(data: InvoiceCreateSchema, db: AsyncSession = Depends(g
         sum_price = i.quantity * c_item.unit_price
         total += sum_price
         
-        # Обновляем счетчик инвойсов в контракте
+        # ЗАЩИТА: Убеждаемся, что значение не None
+        if c_item.invoiced_quantity is None: c_item.invoiced_quantity = 0.0
         c_item.invoiced_quantity += i.quantity
         
         inv_item = InvoiceItemModel(contract_item_id=c_item.id, quantity=i.quantity, unit_price=c_item.unit_price, total_price=sum_price)
@@ -921,7 +926,6 @@ async def create_invoice(data: InvoiceCreateSchema, db: AsyncSession = Depends(g
 
 @app.post("/api/invoices/{inv_id}/factura")
 async def register_factura(inv_id: int, data: FacturaCreateSchema, db: AsyncSession = Depends(get_db)):
-    # Регистрация Фактуры означает ПРИХОД НА СКЛАД
     res = await db.execute(select(InvoiceModel).options(
         selectinload(InvoiceModel.items).selectinload(InvoiceItemModel.contract_item).selectinload(ContractItemModel.order_item)
     ).filter_by(id=inv_id))
@@ -935,15 +939,13 @@ async def register_factura(inv_id: int, data: FacturaCreateSchema, db: AsyncSess
     affected_orders = set()
     contract_id = invoice.contract_id
 
-    # Приходуем товары
     for inv_item in invoice.items:
         c_item = inv_item.contract_item
+        if c_item.received_quantity is None: c_item.received_quantity = 0.0
         c_item.received_quantity += inv_item.quantity
         if c_item.order_item: affected_orders.add(c_item.order_item.order_id)
 
     await db.commit()
-    
-    # Пересчет статусов
     await recalculate_contract(db, contract_id)
     await recalculate_orders(db, affected_orders)
 
