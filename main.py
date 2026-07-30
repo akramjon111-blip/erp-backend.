@@ -7,15 +7,14 @@ from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Float, Boo
 from sqlalchemy.orm import declarative_base, relationship, selectinload
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.future import select
-import enum
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Optional
-import jwt
 
 # --- КОНФИГУРАЦИЯ ---
 SECRET_KEY = "super_secret_key_change_me"
 ALGORITHM = "HS256"
-DATABASE_URL = "sqlite+aiosqlite:///./erp_orders.db"
+# ВАЖНО: Новое имя БД, чтобы сбросить старые кэши и ошибки таблиц!
+DATABASE_URL = "sqlite+aiosqlite:///./erp_orders_v3.db"
 
 # --- БАЗА ДАННЫХ ---
 Base = declarative_base()
@@ -45,16 +44,13 @@ class OrderItemModel(Base):
     requested_quantity = Column(Float)
     stock_balance = Column(Float, default=0)
     allow_analog = Column(Boolean, default=True)
-    manufacturer = Column(String, nullable=True)
-    supplier = Column(String, nullable=True)
     specification = Column(String, nullable=True) 
     tech_spec_file = Column(String, nullable=True)
-    comment = Column(String, nullable=True)
     
     order = relationship("OrderModel", back_populates="items")
     contract_items = relationship("ContractItemModel", back_populates="order_item", cascade="all, delete-orphan")
 
-# НОВЫЕ ТАБЛИЦЫ ДЛЯ ДОГОВОРОВ (ГЛОБАЛЬНЫЕ)
+# ТАБЛИЦА ДОГОВОРОВ (ГЛОБАЛЬНАЯ)
 class ContractModel(Base):
     __tablename__ = "contracts"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -77,7 +73,6 @@ class ContractItemModel(Base):
     
     ordered_quantity = Column(Float)
     unit_price = Column(Float)
-    total_price = Column(Float)
     
     contract = relationship("ContractModel", back_populates="items")
     order_item = relationship("OrderItemModel", back_populates="contract_items")
@@ -122,6 +117,9 @@ class StatusUpdateSchema(BaseModel):
     status: str
     reject_comment: Optional[str] = None
 
+class ContractStatusUpdateSchema(BaseModel):
+    status: str
+
 # --- ПРИЛОЖЕНИЕ ---
 app = FastAPI(title="ERP API")
 
@@ -151,11 +149,6 @@ HTML_CONTENT = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>ERP Закупки</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        .tab-active { border-bottom: 3px solid #2563eb; color: #1d4ed8; font-weight: bold; }
-        .tab-inactive { color: #6b7280; }
-        .tab-inactive:hover { color: #374151; }
-    </style>
 </head>
 <body class="bg-gray-100 font-sans antialiased h-screen flex flex-col relative">
 
@@ -168,9 +161,10 @@ HTML_CONTENT = """
         </div>
     </header>
 
+    <!-- ВКЛАДКИ -->
     <div class="bg-white border-b border-gray-200 flex px-4">
-        <button id="tabOrders" class="px-4 py-3 tab-active transition" onclick="switchTab('orders')">Мои заказы</button>
-        <button id="tabContracts" class="px-4 py-3 tab-inactive transition" onclick="switchTab('contracts')">Договоры</button>
+        <button id="tabOrders" class="px-4 py-3 font-bold border-b-2 border-blue-600 text-blue-600 transition" onclick="switchTab('orders')">Мои заказы</button>
+        <button id="tabContracts" class="px-4 py-3 font-bold border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition" onclick="switchTab('contracts')">Договоры поставки</button>
     </div>
 
     <main class="flex-1 overflow-y-auto p-4" id="mainContent">
@@ -250,7 +244,7 @@ HTML_CONTENT = """
     <!-- МОДАЛКИ ДОГОВОРОВ -->
     <div id="contractModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
         <div class="bg-white p-6 rounded-xl w-full max-w-3xl shadow-2xl max-h-[95vh] overflow-y-auto">
-            <h2 class="text-lg font-bold mb-4 text-indigo-800">Оформление нового договора</h2>
+            <h2 class="text-lg font-bold mb-4 text-indigo-800">Создание нового договора поставки</h2>
             <form id="contractForm" class="space-y-4">
                 <div class="bg-indigo-50 p-3 rounded-lg border border-indigo-100 grid grid-cols-3 gap-3">
                     <div>
@@ -278,18 +272,18 @@ HTML_CONTENT = """
                         </select>
                     </div>
                     <div>
-                        <label class="block text-xs font-semibold text-gray-700 mb-1">Общая сумма (авто)</label>
-                        <input type="text" id="cTotal" readonly class="w-full bg-gray-200 border border-gray-300 rounded p-1.5 text-sm font-bold text-gray-800" value="0.00">
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Общая сумма договора</label>
+                        <input type="text" id="cTotal" readonly class="w-full bg-indigo-100 border border-indigo-200 rounded p-1.5 text-sm font-bold text-indigo-900" value="0.00">
                     </div>
                 </div>
 
                 <hr class="border-gray-200">
                 <div class="flex gap-2 items-end">
                     <div class="flex-1">
-                        <label class="block text-xs font-semibold text-indigo-700 mb-1">Выберите позиции из заказов:</label>
-                        <select id="cAvailItems" class="w-full border border-indigo-300 rounded p-2 text-sm bg-white font-medium"></select>
+                        <label class="block text-xs font-semibold text-indigo-700 mb-1">Выберите товары из заявок для этого договора:</label>
+                        <select id="cAvailItems" class="w-full border border-indigo-300 rounded p-2 text-sm bg-white font-medium shadow-sm"></select>
                     </div>
-                    <button type="button" onclick="addContractRow()" class="bg-indigo-600 text-white px-3 py-2 rounded text-sm font-bold hover:bg-indigo-700 whitespace-nowrap">+ Добавить в договор</button>
+                    <button type="button" onclick="addContractRow()" class="bg-indigo-600 text-white px-3 py-2 rounded text-sm font-bold hover:bg-indigo-700 whitespace-nowrap shadow-sm">+ Добавить товар</button>
                 </div>
 
                 <div id="cRowsContainer" class="space-y-2 mt-3"></div>
@@ -322,20 +316,19 @@ HTML_CONTENT = """
         // --- УПРАВЛЕНИЕ ВКЛАДКАМИ ---
         function switchTab(tab) {
             currentTab = tab;
-            document.getElementById('tabOrders').className = `px-4 py-3 transition ${tab === 'orders' ? 'tab-active' : 'tab-inactive'}`;
-            document.getElementById('tabContracts').className = `px-4 py-3 transition ${tab === 'contracts' ? 'tab-active' : 'tab-inactive'}`;
+            document.getElementById('tabOrders').className = `px-4 py-3 font-bold transition border-b-2 ${tab === 'orders' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`;
+            document.getElementById('tabContracts').className = `px-4 py-3 font-bold transition border-b-2 ${tab === 'contracts' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`;
             
             const btnContainer = document.getElementById('headerActions');
             if(tab === 'orders') {
                 btnContainer.innerHTML = `<button onclick="openOrderModal()" class="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1.5 rounded-lg font-medium text-sm flex items-center gap-1 shadow-sm">+ Новый заказ</button>`;
             } else {
-                btnContainer.innerHTML = `<button onclick="openContractModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg font-medium text-sm flex items-center gap-1 shadow-sm">+ Новый договор</button>`;
+                btnContainer.innerHTML = `<button onclick="openContractModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg font-medium text-sm flex items-center gap-1 shadow-sm">+ Создать договор</button>`;
             }
             renderApp();
         }
 
         document.getElementById('fabAddOrder').addEventListener('click', openOrderModal);
-
         function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
         async function fetchData() {
@@ -345,7 +338,7 @@ HTML_CONTENT = """
                 contractsCache = await resCon.json();
                 renderApp();
             } catch (err) {
-                document.getElementById('mainContent').innerHTML = '<p class="text-red-500 text-center mt-10">Ошибка загрузки данных</p>';
+                document.getElementById('mainContent').innerHTML = '<p class="text-red-500 text-center mt-10">Ошибка загрузки данных. Пожалуйста, обновите страницу (Ctrl+F5).</p>';
             }
         }
 
@@ -444,7 +437,7 @@ HTML_CONTENT = """
                 let pColor = o.priority==='Высокий'?'bg-red-100 text-red-700':'bg-gray-100 text-gray-700';
                 
                 let sColor = 'bg-gray-200';
-                if(o.status==='Черновик') sColor='bg-gray-200';
+                if(o.status==='Черновик') sColor='bg-gray-200 border border-gray-300';
                 if(o.status==='На согласовании') sColor='bg-yellow-100 text-yellow-700';
                 if(o.status==='Принят в работу') sColor='bg-purple-100 text-purple-700';
                 if(o.status==='В процессе закупки') sColor='bg-indigo-100 text-indigo-700';
@@ -462,7 +455,7 @@ HTML_CONTENT = """
                     ? `<span class="ml-2 text-xs font-bold px-1.5 py-0.5 rounded ${ordTotal>=reqTotal?'bg-green-100 text-green-700':'bg-blue-100 text-blue-700'}">По договорам: ${ordTotal}/${reqTotal}</span>` : '';
 
                 html += `
-                    <div onclick="openOrderDetail('${o.id}')" class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-blue-400 cursor-pointer">
+                    <div onclick="openOrderDetail('${o.id}')" class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-blue-400 cursor-pointer transition">
                         <div class="flex justify-between mb-2">
                             <div>
                                 <h3 class="font-bold text-gray-900 inline-block mr-2">Заказ #${o.id}</h3>
@@ -493,8 +486,8 @@ HTML_CONTENT = """
                 </div>
                 <p><b>Направление:</b> ${o.requesting_dept_id} ➔ ${o.executing_dept_id}</p>
                 ${o.comment ? `<div class="text-xs bg-red-50 text-red-700 p-2 rounded mt-2 border-l-2 border-red-400 whitespace-pre-wrap">${o.comment}</div>` : ''}
-                <hr class="my-3">
-                <h4 class="font-bold">Позиции:</h4>
+                
+                <h4 class="font-bold mt-4 mb-2">Позиции:</h4>
                 <div class="space-y-2">
             `;
             
@@ -504,27 +497,39 @@ HTML_CONTENT = """
                 if(i.contract_items && i.contract_items.length > 0) {
                     i.contract_items.forEach(ci => {
                         ordered += ci.ordered_quantity;
-                        cBadges += `<span class="bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded mr-1" title="Договор #${ci.contract_id}">Заказано: ${ci.ordered_quantity}</span>`;
+                        let statusClr = ci.status === 'Выполнен' ? 'text-green-700 bg-green-100' : (ci.status === 'На складе' ? 'text-orange-700 bg-orange-100' : 'text-indigo-700 bg-indigo-100');
+                        cBadges += `<span class="${statusClr} text-xs px-1.5 py-0.5 rounded mr-1 border border-gray-200" title="Поставщик: ${ci.supplier}">В договоре: ${ci.ordered_quantity} шт.</span>`;
                     });
                 }
                 
                 let rem = i.requested_quantity - ordered;
-                let stateBadge = rem <= 0 ? `<span class="text-green-600 text-xs font-bold">✓ Закрыто</span>` : `<span class="text-yellow-600 text-xs font-bold">Остаток: ${rem}</span>`;
+                let stateBadge = rem <= 0 ? `<span class="text-green-600 text-xs font-bold">✓ Закуплено полностью</span>` : `<span class="text-yellow-600 text-xs font-bold bg-yellow-50 px-1 rounded">Осталось: ${rem}</span>`;
 
                 html += `
-                    <div class="border p-2 rounded bg-gray-50 text-xs">
+                    <div class="border p-2 rounded bg-gray-50 text-xs relative">
                         <div class="flex justify-between font-bold text-sm mb-1">
-                            <span>${i.name} (${i.material_code})</span>
+                            <span>${i.name} <span class="text-gray-400 font-normal">(${i.material_code})</span></span>
                             <span>${i.requested_quantity} ${i.unit}</span>
                         </div>
-                        <div class="flex justify-between items-center mt-2 border-t pt-1">
-                            <div>${cBadges || '<span class="text-gray-400 italic">Нет договоров</span>'}</div>
+                        <div class="flex justify-between items-center mt-2 border-t pt-2">
+                            <div class="flex flex-wrap gap-1">${cBadges || '<span class="text-gray-400 italic">Ждет оформления договора</span>'}</div>
                             ${stateBadge}
                         </div>
                     </div>
                 `;
             });
             html += '</div>';
+
+            // Если есть договоры, покажем их сводку
+            if(o.contracts && o.contracts.length > 0) {
+                html += '<h4 class="font-bold mt-4 mb-2">Связанные договоры:</h4><div class="space-y-2">';
+                o.contracts.forEach(c => {
+                    let sColor = c.status==='Выполнен'?'text-green-700':'text-indigo-700';
+                    html += `<div class="p-2 border rounded bg-indigo-50 text-xs"><b>Договор №${c.contract_number}</b> (${c.supplier_name}) — <span class="font-bold ${sColor}">${c.status}</span></div>`;
+                });
+                html += '</div>';
+            }
+
             document.getElementById('ordDetBody').innerHTML = html;
 
             let footer = '';
@@ -536,10 +541,10 @@ HTML_CONTENT = """
             } else if (o.status === 'На согласовании') {
                 footer = `
                     <button onclick="rejectOrder('${o.id}')" class="px-4 py-2 bg-red-600 text-white rounded font-bold">❌ Отказать</button>
-                    <button onclick="updateOrderStatus('${o.id}', 'Принят в работу')" class="px-4 py-2 bg-purple-600 text-white rounded font-bold">Утвердить</button>
+                    <button onclick="updateOrderStatus('${o.id}', 'Принят в работу')" class="px-4 py-2 bg-purple-600 text-white rounded font-bold">Утвердить (В работу)</button>
                 `;
             } else {
-                footer = `<span class="text-sm text-gray-500 italic">Для закупки товаров по этому заказу перейдите во вкладку "Договоры".</span>`;
+                footer = `<span class="text-sm text-gray-500 italic bg-gray-100 p-2 rounded w-full text-center">Закупка и движение по складам теперь оформляется во вкладке <b>"Договоры поставки"</b>.</span>`;
             }
             document.getElementById('ordDetFooter').innerHTML = footer;
             document.getElementById('orderDetailModal').classList.remove('hidden');
@@ -578,12 +583,13 @@ HTML_CONTENT = """
         function openContractModal() {
             document.getElementById('contractForm').reset();
             document.getElementById('cRowsContainer').innerHTML = '';
+            document.getElementById('cTotal').value = '0.00';
             populateContractItemsDropdown();
             document.getElementById('contractModal').classList.remove('hidden');
         }
 
         function populateContractItemsDropdown() {
-            let opts = '<option value="" disabled selected>Выберите позицию (Остаток > 0)</option>';
+            let opts = '<option value="" disabled selected>Выберите товар из утвержденных заявок...</option>';
             ordersCache.forEach(o => {
                 if(o.status === 'Черновик' || o.status === 'На согласовании') return;
                 o.items.forEach(i => {
@@ -591,7 +597,7 @@ HTML_CONTENT = """
                     if(i.contract_items) i.contract_items.forEach(c => ord += c.ordered_quantity);
                     let rem = i.requested_quantity - ord;
                     if(rem > 0) {
-                        opts += `<option value="${i.id}" data-max="${rem}" data-name="${i.name}" data-order="${o.id}">Заказ ${o.id} | ${i.name} (Ост: ${rem})</option>`;
+                        opts += `<option value="${i.id}" data-max="${rem}" data-name="${i.name}" data-order="${o.id}">Заказ ${o.id} | ${i.name} (Нужно: ${rem})</option>`;
                     }
                 });
             });
@@ -600,12 +606,11 @@ HTML_CONTENT = """
 
         function addContractRow() {
             const sel = document.getElementById('cAvailItems');
-            if(!sel.value) return alert('Выберите позицию!');
+            if(!sel.value) return alert('Выберите позицию из списка!');
             const opt = sel.options[sel.selectedIndex];
             const iid = opt.value;
             
-            // Check if already added
-            if(document.querySelector(`.c-row[data-iid="${iid}"]`)) return alert('Эта позиция уже добавлена в список ниже!');
+            if(document.querySelector(`.c-row[data-iid="${iid}"]`)) return alert('Эта позиция уже в списке ниже!');
 
             const max = opt.getAttribute('data-max');
             const name = opt.getAttribute('data-name');
@@ -615,11 +620,17 @@ HTML_CONTENT = """
             div.className = `c-row bg-white border border-indigo-200 p-2 rounded flex gap-2 items-center text-sm`;
             div.setAttribute('data-iid', iid);
             div.innerHTML = `
-                <div class="flex-1 font-bold text-gray-700">${ord} <span class="font-normal">| ${name}</span></div>
-                <div><input type="number" class="cr-qty w-20 border rounded p-1" value="${max}" max="${max}" oninput="calcContractTotal()"></div>
-                <div><input type="number" class="cr-price w-24 border rounded p-1" placeholder="Цена" oninput="calcContractTotal()"></div>
-                <div class="font-bold text-indigo-700 w-24 text-right cr-sum">0.00</div>
-                <button type="button" onclick="this.parentElement.remove(); calcContractTotal()" class="text-red-500 font-bold ml-2">✕</button>
+                <div class="flex-1 font-bold text-gray-700 bg-gray-100 px-2 py-1 rounded">${ord} <span class="font-normal">| ${name}</span></div>
+                <div>
+                    <span class="text-xs text-gray-500 block mb-0.5">Кол-во (макс ${max})</span>
+                    <input type="number" class="cr-qty w-20 border border-gray-300 rounded p-1" value="${max}" max="${max}" oninput="calcContractTotal()" required>
+                </div>
+                <div>
+                    <span class="text-xs text-gray-500 block mb-0.5">Цена/шт</span>
+                    <input type="number" step="0.01" class="cr-price w-24 border border-gray-300 rounded p-1" placeholder="0.00" oninput="calcContractTotal()" required>
+                </div>
+                <div class="font-bold text-indigo-700 w-24 text-right cr-sum mt-4">0.00</div>
+                <button type="button" onclick="this.parentElement.remove(); calcContractTotal()" class="text-red-500 font-bold ml-2 mt-4 hover:bg-red-50 px-2 rounded">✕</button>
             `;
             document.getElementById('cRowsContainer').appendChild(div);
             sel.value = "";
@@ -631,7 +642,7 @@ HTML_CONTENT = """
                 const qtyInput = row.querySelector('.cr-qty');
                 let max = parseFloat(qtyInput.getAttribute('max'));
                 let q = parseFloat(qtyInput.value)||0;
-                if(q > max) { q = max; qtyInput.value = max; alert('Превышен остаток!'); }
+                if(q > max) { q = max; qtyInput.value = max; alert('Количество превышает остаток по заявке!'); }
                 let p = parseFloat(row.querySelector('.cr-price').value)||0;
                 let sum = q * p;
                 row.querySelector('.cr-sum').innerText = sum.toFixed(2);
@@ -650,7 +661,7 @@ HTML_CONTENT = """
                     unit_price: parseFloat(row.querySelector('.cr-price').value)
                 });
             });
-            if(items.length === 0) return alert('Добавьте позиции в договор!');
+            if(items.length === 0) return alert('Вы не добавили ни одного товара в договор!');
 
             const payload = {
                 supplier_name: document.getElementById('cSupName').value,
@@ -663,28 +674,28 @@ HTML_CONTENT = """
 
             try {
                 const res = await fetch('/api/contracts', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-                if(res.ok) { closeModal('contractModal'); fetchData(); } else alert('Ошибка сохранения');
+                if(res.ok) { closeModal('contractModal'); fetchData(); } else alert('Ошибка сохранения договора');
             } catch(e) { alert('Ошибка сети'); }
         });
 
         function renderContracts(container) {
             if(contractsCache.length === 0) {
-                container.innerHTML = '<p class="text-gray-500 text-center mt-10">Договоров пока нет</p>';
+                container.innerHTML = '<p class="text-gray-500 text-center mt-10">Оформленных договоров пока нет</p>';
                 return;
             }
             let html = '<div class="space-y-4 max-w-3xl mx-auto pb-10">';
             contractsCache.forEach(c => {
                 let sColor = c.status==='Заказан поставщику' ? 'bg-indigo-100 text-indigo-700' : (c.status==='На складе' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700');
                 html += `
-                    <div onclick="openContractDetail('${c.id}')" class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-indigo-400 cursor-pointer">
+                    <div onclick="openContractDetail('${c.id}')" class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-indigo-400 cursor-pointer transition">
                         <div class="flex justify-between mb-2">
                             <h3 class="font-bold text-indigo-900">Договор №${c.contract_number} <span class="font-normal text-gray-500">от ${c.contract_date}</span></h3>
                             <span class="text-xs font-bold px-2 py-1 rounded ${sColor}">${c.status}</span>
                         </div>
                         <p class="text-sm font-medium mb-2">🏢 Поставщик: ${c.supplier_name}</p>
                         <div class="flex justify-between text-xs text-gray-600 bg-gray-50 p-2 rounded">
-                            <span>Позиций: ${c.items.length}</span>
-                            <span class="font-bold text-sm text-gray-900">${c.total_amount} ${c.currency}</span>
+                            <span>Условия: ${c.incoterms}, ${c.currency} | Позиций: ${c.items.length}</span>
+                            <span class="font-bold text-sm text-gray-900">Сумма: ${c.total_amount} ${c.currency}</span>
                         </div>
                     </div>
                 `;
@@ -702,7 +713,7 @@ HTML_CONTENT = """
                     <div><b>Поставщик:</b> ${c.supplier_name}</div>
                     <div><b>Дата:</b> ${c.contract_date}</div>
                     <div><b>Условия:</b> ${c.incoterms}, ${c.currency}</div>
-                    <div><b>Сумма:</b> <span class="font-bold text-indigo-700 text-base">${c.total_amount}</span></div>
+                    <div><b>Сумма:</b> <span class="font-bold text-indigo-700 text-base">${c.total_amount} ${c.currency}</span></div>
                 </div>
                 <h4 class="font-bold mt-4 mb-2">Включенные позиции:</h4>
                 <div class="space-y-2">
@@ -710,13 +721,13 @@ HTML_CONTENT = """
             
             c.items.forEach(ci => {
                 html += `
-                    <div class="border p-2 rounded flex justify-between items-center text-xs">
+                    <div class="border p-2 rounded flex justify-between items-center text-xs bg-gray-50">
                         <div>
-                            <span class="font-bold text-gray-800 border bg-white px-1 mr-1">Заказ #${ci.order_item.order_id}</span>
-                            ${ci.order_item.name}
+                            <span class="font-bold text-indigo-800 bg-white border px-1.5 py-0.5 rounded mr-2">Заказ #${ci.order_item.order_id}</span>
+                            <span class="font-medium text-gray-800">${ci.order_item.name}</span>
                         </div>
                         <div class="text-right">
-                            <div class="font-bold">${ci.ordered_quantity} шт.</div>
+                            <div class="font-bold text-sm">${ci.ordered_quantity} шт.</div>
                             <div class="text-gray-500">${ci.unit_price} ${c.currency}/шт</div>
                         </div>
                     </div>
@@ -727,9 +738,11 @@ HTML_CONTENT = """
 
             let footer = '';
             if(c.status === 'Заказан поставщику') {
-                footer = `<button onclick="updateContractStatus(${c.id}, 'На складе')" class="px-4 py-2 bg-orange-500 text-white rounded font-bold">📦 Принять на склад</button>`;
+                footer = `<button onclick="updateContractStatus(${c.id}, 'На складе')" class="px-4 py-2 bg-orange-500 text-white rounded font-bold shadow-sm">📦 Принять товары на склад</button>`;
             } else if (c.status === 'На складе') {
-                footer = `<button onclick="updateContractStatus(${c.id}, 'Выполнен')" class="px-4 py-2 bg-green-600 text-white rounded font-bold">✅ Выдать и завершить</button>`;
+                footer = `<button onclick="updateContractStatus(${c.id}, 'Выполнен')" class="px-4 py-2 bg-green-600 text-white rounded font-bold shadow-sm">✅ Выдать (Завершить договор)</button>`;
+            } else {
+                 footer = `<span class="text-green-600 font-bold w-full text-center">Все обязательства по договору выполнены.</span>`;
             }
             document.getElementById('conDetFooter').innerHTML = footer;
             document.getElementById('contractDetailModal').classList.remove('hidden');
@@ -743,7 +756,8 @@ HTML_CONTENT = """
             } catch(e) {}
         }
 
-        fetchData();
+        // Запуск при загрузке страницы
+        switchTab('orders');
     </script>
 </body>
 </html>
@@ -780,7 +794,7 @@ async def recalculate_orders(db: AsyncSession, order_ids: set):
             order.status = "Принят в работу"
         elif total_ord < total_req:
             order.status = "В процессе закупки"
-        else: # Все объемы покрыты договорами
+        else: # Все объемы покрыты
             if all_contracts_done: order.status = "Выполнен"
             elif all_contracts_stocked_or_done: order.status = "На складе"
             else: order.status = "Заказан поставщику"
@@ -845,24 +859,35 @@ async def update_order_status(order_id: str, payload: StatusUpdateSchema, db: As
 
 @app.get("/api/orders")
 async def get_all_orders(db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(OrderModel).options(selectinload(OrderModel.items).selectinload(OrderItemModel.contract_items)))
+    res = await db.execute(select(OrderModel).options(selectinload(OrderModel.items).selectinload(OrderItemModel.contract_items).selectinload(ContractItemModel.contract)))
     orders = res.scalars().all()
     out = []
     for o in orders:
         items_out = []
+        contracts_set = {}
         for i in o.items:
+            c_items_out = []
+            for ci in i.contract_items:
+                c_items_out.append({
+                    "ordered_quantity": ci.ordered_quantity,
+                    "contract_id": ci.contract_id,
+                    "status": ci.contract.status,
+                    "supplier": ci.contract.supplier_name
+                })
+                contracts_set[ci.contract_id] = ci.contract
             items_out.append({
                 "id": i.id, "material_code": i.material_code, "name": i.name, "unit": i.unit,
                 "requested_quantity": i.requested_quantity, "allow_analog": i.allow_analog,
                 "specification": i.specification, "tech_spec_file": i.tech_spec_file,
-                "contract_items": [{"ordered_quantity": ci.ordered_quantity, "contract_id": ci.contract_id} for ci in i.contract_items]
+                "contract_items": c_items_out
             })
         out.append({
             "id": o.id, "status": o.status, "enterprise": o.enterprise, "priority": o.priority,
             "requesting_dept_id": o.requesting_dept_id, "executing_dept_id": o.executing_dept_id,
             "planned_date": o.planned_date, "created_at": o.created_at.isoformat(),
             "approved_at": o.approved_at.isoformat() if o.approved_at else None, "comment": o.comment,
-            "items": items_out
+            "items": items_out,
+            "contracts": [{"id": c.id, "contract_number": c.contract_number, "status": c.status, "supplier_name": c.supplier_name} for c in contracts_set.values()]
         })
     return out
 
