@@ -20,14 +20,6 @@ DATABASE_URL = "sqlite+aiosqlite:///./erp_orders.db"
 # --- БАЗА ДАННЫХ ---
 Base = declarative_base()
 
-class UserModel(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    username = Column(String, unique=True, index=True)
-    password_hash = Column(String)
-    name = Column(String)
-    role = Column(String)
-
 class OrderModel(Base):
     __tablename__ = "orders"
     id = Column(String, primary_key=True, index=True)
@@ -40,10 +32,8 @@ class OrderModel(Base):
     priority = Column(String, default="Средний")
     planned_date = Column(String, nullable=True) 
     comment = Column(String, nullable=True)
-    responsible_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     
     items = relationship("OrderItemModel", back_populates="order", cascade="all, delete-orphan")
-    contracts = relationship("OrderContractModel", back_populates="order", cascade="all, delete-orphan")
 
 class OrderItemModel(Base):
     __tablename__ = "order_items"
@@ -60,27 +50,37 @@ class OrderItemModel(Base):
     specification = Column(String, nullable=True) 
     tech_spec_file = Column(String, nullable=True)
     comment = Column(String, nullable=True)
+    
     order = relationship("OrderModel", back_populates="items")
+    contract_items = relationship("ContractItemModel", back_populates="order_item", cascade="all, delete-orphan")
 
-class OrderContractModel(Base):
-    __tablename__ = "order_contracts"
+# НОВЫЕ ТАБЛИЦЫ ДЛЯ ДОГОВОРОВ (ГЛОБАЛЬНЫЕ)
+class ContractModel(Base):
+    __tablename__ = "contracts"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    order_id = Column(String, ForeignKey("orders.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    supplier_name = Column(String)
+    contract_number = Column(String)
+    contract_date = Column(String)
+    currency = Column(String)
+    incoterms = Column(String)
+    status = Column(String, default="Заказан поставщику")
+    total_amount = Column(Float, default=0)
     
-    # НОВЫЕ ПОЛЯ: Привязка к конкретной позиции заказа
-    item_id = Column(Integer, ForeignKey("order_items.id"), nullable=True)
-    item_name = Column(String, nullable=True)
+    items = relationship("ContractItemModel", back_populates="contract", cascade="all, delete-orphan")
+
+class ContractItemModel(Base):
+    __tablename__ = "contract_items"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    contract_id = Column(Integer, ForeignKey("contracts.id"))
+    order_item_id = Column(Integer, ForeignKey("order_items.id"))
     
-    supplier_name = Column(String, nullable=True)
-    contract_number = Column(String, nullable=True)
-    contract_date = Column(String, nullable=True)
-    currency = Column(String, nullable=True)
-    incoterms = Column(String, nullable=True)
-    ordered_quantity = Column(Float, nullable=True)
-    unit_price = Column(Float, nullable=True)
-    total_amount = Column(Float, nullable=True)
-    status = Column(String, default="Заказан") 
-    order = relationship("OrderModel", back_populates="contracts")
+    ordered_quantity = Column(Float)
+    unit_price = Column(Float)
+    total_price = Column(Float)
+    
+    contract = relationship("ContractModel", back_populates="items")
+    order_item = relationship("OrderItemModel", back_populates="contract_items")
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
@@ -91,13 +91,9 @@ class OrderItemBase(BaseModel):
     name: str
     unit: str
     requested_quantity: float
-    stock_balance: float = 0
     allow_analog: bool = True
-    manufacturer: Optional[str] = "-"
-    supplier: Optional[str] = "-"
     specification: Optional[str] = "-" 
     tech_spec_file: Optional[str] = "-" 
-    comment: Optional[str] = None
 
 class OrderCreateSchema(BaseModel):
     id: Optional[str] = ""  
@@ -109,28 +105,25 @@ class OrderCreateSchema(BaseModel):
     comment: Optional[str] = None
     items: List[OrderItemBase]
 
-class OrderStatusUpdateSchema(BaseModel):
+class ContractItemSchema(BaseModel):
+    order_item_id: int
+    ordered_quantity: float
+    unit_price: float
+
+class ContractCreateSchema(BaseModel):
+    supplier_name: str
+    contract_number: str
+    contract_date: str
+    currency: str
+    incoterms: str
+    items: List[ContractItemSchema]
+
+class StatusUpdateSchema(BaseModel):
     status: str
     reject_comment: Optional[str] = None
-    append_comment: Optional[str] = None
-    
-    # Данные для договора
-    item_id: Optional[int] = None
-    item_name: Optional[str] = None
-    supplier_name: Optional[str] = None
-    contract_number: Optional[str] = None
-    contract_date: Optional[str] = None
-    currency: Optional[str] = None
-    incoterms: Optional[str] = None
-    ordered_quantity: Optional[float] = None
-    unit_price: Optional[float] = None
-    total_amount: Optional[float] = None
-
-class ContractStatusUpdateSchema(BaseModel):
-    status: str
 
 # --- ПРИЛОЖЕНИЕ ---
-app = FastAPI(title="ERP Order Management API")
+app = FastAPI(title="ERP API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -139,8 +132,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-security = HTTPBearer()
 
 async def get_db():
     async with AsyncSessionLocal() as session:
@@ -158,44 +149,29 @@ HTML_CONTENT = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Управление заказами (ТЗ)</title>
+    <title>ERP Закупки</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        // Глобальная функция для обновления макс. кол-ва при смене позиции в форме закупки
-        function updateSupItemOptions() {
-            const sel = document.getElementById('supItemSelect');
-            if(!sel) return;
-            const opt = sel.options[sel.selectedIndex];
-            const max = parseFloat(opt.getAttribute('data-max'));
-            const qtyInput = document.getElementById('supQty');
-            qtyInput.value = max;
-            qtyInput.setAttribute('data-max', max);
-            document.getElementById('supQtyLabel').innerText = `Кол-во ед. (макс. ${max})`;
-            calcSum();
-        }
-
-        function calcSum() {
-            const qtyInput = document.getElementById('supQty');
-            const maxQty = parseFloat(qtyInput.getAttribute('data-max'));
-            let qty = parseFloat(qtyInput.value) || 0;
-            if (qty > maxQty) {
-                alert('Внимание: Количество не может превышать доступный остаток (' + maxQty + ')!');
-                qtyInput.value = maxQty;
-                qty = maxQty;
-            }
-            let price = parseFloat(document.getElementById('supPrice').value) || 0;
-            document.getElementById('supTotal').value = (qty * price).toFixed(2);
-        }
-    </script>
+    <style>
+        .tab-active { border-bottom: 3px solid #2563eb; color: #1d4ed8; font-weight: bold; }
+        .tab-inactive { color: #6b7280; }
+        .tab-inactive:hover { color: #374151; }
+    </style>
 </head>
 <body class="bg-gray-100 font-sans antialiased h-screen flex flex-col relative">
 
     <header class="bg-blue-600 text-white p-4 shadow-md flex justify-between items-center z-10">
-        <h1 class="text-xl font-bold">Мои заказы</h1>
-        <button id="fabAdd" class="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1.5 rounded-lg font-medium text-sm flex items-center gap-1 transition shadow-sm">
-            + Новый заказ
-        </button>
+        <h1 class="text-xl font-bold">ERP Закупки</h1>
+        <div id="headerActions">
+            <button id="fabAddOrder" class="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1.5 rounded-lg font-medium text-sm flex items-center gap-1 transition shadow-sm">
+                + Новый заказ
+            </button>
+        </div>
     </header>
+
+    <div class="bg-white border-b border-gray-200 flex px-4">
+        <button id="tabOrders" class="px-4 py-3 tab-active transition" onclick="switchTab('orders')">Мои заказы</button>
+        <button id="tabContracts" class="px-4 py-3 tab-inactive transition" onclick="switchTab('contracts')">Договоры</button>
+    </div>
 
     <main class="flex-1 overflow-y-auto p-4" id="mainContent">
         <div class="flex items-center justify-center h-full">
@@ -203,7 +179,7 @@ HTML_CONTENT = """
         </div>
     </main>
 
-    <!-- Модальное окно создания / редактирования заказа -->
+    <!-- МОДАЛКИ ЗАКАЗОВ -->
     <div id="orderModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
         <div class="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
             <h2 id="orderModalTitle" class="text-lg font-bold mb-4 text-gray-800">Создание нового заказа</h2>
@@ -246,200 +222,206 @@ HTML_CONTENT = """
                         <textarea id="orderComment" rows="1" class="w-full border border-gray-300 rounded-lg p-2 text-sm resize-y" placeholder="Примечания..."></textarea>
                     </div>
                 </div>
-                
                 <hr class="my-3 border-gray-200">
-                
                 <div class="flex justify-between items-center mb-2">
                     <h3 class="font-bold text-sm text-gray-700">Позиции (Товары / Услуги)</h3>
                     <button type="button" onclick="addItemRow()" class="bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1 rounded-lg text-xs font-bold transition shadow-sm">+ Добавить позицию</button>
                 </div>
-                
                 <div id="itemsContainer" class="space-y-3"></div>
-                
                 <div class="flex justify-end space-x-2 mt-5 pt-3 border-t border-gray-200">
-                    <button type="button" id="closeModalBtn" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Отмена</button>
-                    <button type="submit" id="submitBtn" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">Создать заказ</button>
+                    <button type="button" onclick="closeModal('orderModal')" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Отмена</button>
+                    <button type="submit" id="submitOrderBtn" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">Создать заказ</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <!-- Модальное окно детализации заказа -->
-    <div id="detailModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
-        <div class="bg-white p-6 rounded-xl w-full max-w-lg shadow-2xl max-h-[95vh] overflow-y-auto">
+    <div id="orderDetailModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
+        <div class="bg-white p-6 rounded-xl w-full max-w-2xl shadow-2xl max-h-[95vh] overflow-y-auto">
             <div class="flex justify-between items-center mb-4 border-b pb-2">
-                <h2 id="detModalTitle" class="text-lg font-bold text-gray-800">Детали заказа</h2>
-                <button onclick="closeDetailModal()" class="text-gray-400 hover:text-gray-600 font-bold text-lg">&times;</button>
+                <h2 id="ordDetTitle" class="text-lg font-bold text-gray-800">Детали заказа</h2>
+                <button onclick="closeModal('orderDetailModal')" class="text-gray-400 hover:text-gray-600 font-bold text-lg">&times;</button>
             </div>
-            <div id="detModalBody" class="space-y-4 text-sm text-gray-700">
-                <!-- Контент детализации -->
+            <div id="ordDetBody" class="space-y-4 text-sm text-gray-700"></div>
+            <div id="ordDetFooter" class="mt-6 pt-3 border-t flex flex-col gap-3"></div>
+        </div>
+    </div>
+
+    <!-- МОДАЛКИ ДОГОВОРОВ -->
+    <div id="contractModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
+        <div class="bg-white p-6 rounded-xl w-full max-w-3xl shadow-2xl max-h-[95vh] overflow-y-auto">
+            <h2 class="text-lg font-bold mb-4 text-indigo-800">Оформление нового договора</h2>
+            <form id="contractForm" class="space-y-4">
+                <div class="bg-indigo-50 p-3 rounded-lg border border-indigo-100 grid grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Поставщик</label>
+                        <input type="text" id="cSupName" required class="w-full border border-gray-300 rounded p-1.5 text-sm" placeholder="ООО...">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Номер договора</label>
+                        <input type="text" id="cNum" required class="w-full border border-gray-300 rounded p-1.5 text-sm" placeholder="№">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Дата договора</label>
+                        <input type="date" id="cDate" required class="w-full border border-gray-300 rounded p-1.5 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Валюта</label>
+                        <select id="cCur" class="w-full border border-gray-300 rounded p-1.5 text-sm bg-white">
+                            <option>AZN</option><option>USD</option><option>EUR</option><option>RUB</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Инкотермс</label>
+                        <select id="cInco" class="w-full border border-gray-300 rounded p-1.5 text-sm bg-white">
+                            <option>EXW</option><option>FCA</option><option>CPT</option><option>CIP</option><option>DAP</option><option>DDP</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-700 mb-1">Общая сумма (авто)</label>
+                        <input type="text" id="cTotal" readonly class="w-full bg-gray-200 border border-gray-300 rounded p-1.5 text-sm font-bold text-gray-800" value="0.00">
+                    </div>
+                </div>
+
+                <hr class="border-gray-200">
+                <div class="flex gap-2 items-end">
+                    <div class="flex-1">
+                        <label class="block text-xs font-semibold text-indigo-700 mb-1">Выберите позиции из заказов:</label>
+                        <select id="cAvailItems" class="w-full border border-indigo-300 rounded p-2 text-sm bg-white font-medium"></select>
+                    </div>
+                    <button type="button" onclick="addContractRow()" class="bg-indigo-600 text-white px-3 py-2 rounded text-sm font-bold hover:bg-indigo-700 whitespace-nowrap">+ Добавить в договор</button>
+                </div>
+
+                <div id="cRowsContainer" class="space-y-2 mt-3"></div>
+
+                <div class="flex justify-end space-x-2 mt-5 pt-3 border-t border-gray-200">
+                    <button type="button" onclick="closeModal('contractModal')" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Отмена</button>
+                    <button type="submit" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700">Сохранить договор</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="contractDetailModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
+        <div class="bg-white p-6 rounded-xl w-full max-w-2xl shadow-2xl max-h-[95vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4 border-b pb-2">
+                <h2 id="conDetTitle" class="text-lg font-bold text-indigo-800">Детали договора</h2>
+                <button onclick="closeModal('contractDetailModal')" class="text-gray-400 hover:text-gray-600 font-bold text-lg">&times;</button>
             </div>
-            <div id="detModalFooter" class="mt-6 pt-3 border-t flex flex-col gap-3">
-                <!-- Кнопки статуса и формы -->
-            </div>
+            <div id="conDetBody" class="space-y-4 text-sm text-gray-700"></div>
+            <div id="conDetFooter" class="mt-6 pt-3 border-t flex justify-end gap-2"></div>
         </div>
     </div>
 
     <script>
+        let currentTab = 'orders';
         let ordersCache = [];
+        let contractsCache = [];
         let editingOrderId = null;
 
-        const modal = document.getElementById('orderModal');
-        const fabAdd = document.getElementById('fabAdd');
-        const closeModalBtn = document.getElementById('closeModalBtn');
-        const orderForm = document.getElementById('orderForm');
-        const itemsContainer = document.getElementById('itemsContainer');
-
-        function addItemRow(itemData = null) {
-            const row = document.createElement('div');
-            row.className = 'item-row bg-gray-50 p-3 rounded-lg border border-gray-200 relative shadow-sm';
+        // --- УПРАВЛЕНИЕ ВКЛАДКАМИ ---
+        function switchTab(tab) {
+            currentTab = tab;
+            document.getElementById('tabOrders').className = `px-4 py-3 transition ${tab === 'orders' ? 'tab-active' : 'tab-inactive'}`;
+            document.getElementById('tabContracts').className = `px-4 py-3 transition ${tab === 'contracts' ? 'tab-active' : 'tab-inactive'}`;
             
-            const removeBtn = `<button type="button" onclick="this.closest('.item-row').remove()" class="absolute top-2 right-2 text-red-500 hover:text-red-700 text-xs font-bold bg-white px-2 py-0.5 rounded border border-red-200 shadow-sm">✕ Удалить</button>`;
-
-            const existingFile = itemData && itemData.tech_spec_file && itemData.tech_spec_file !== '-' && itemData.tech_spec_file !== 'Не прикреплен' ? itemData.tech_spec_file : null;
-            let fileBoxHtml = '';
-            if (existingFile) {
-                fileBoxHtml = `
-                    <div class="current-file-box mb-1 bg-blue-50 text-blue-700 text-xs px-2 py-1 rounded flex justify-between items-center border border-blue-100 w-full">
-                        <span class="truncate font-medium current-file-name" data-filename="${existingFile}">${existingFile}</span>
-                        <button type="button" onclick="this.closest('.current-file-box').remove()" class="text-red-500 hover:text-red-700 font-bold ml-2">✕ Удалить</button>
-                    </div>
-                `;
+            const btnContainer = document.getElementById('headerActions');
+            if(tab === 'orders') {
+                btnContainer.innerHTML = `<button onclick="openOrderModal()" class="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1.5 rounded-lg font-medium text-sm flex items-center gap-1 shadow-sm">+ Новый заказ</button>`;
+            } else {
+                btnContainer.innerHTML = `<button onclick="openContractModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg font-medium text-sm flex items-center gap-1 shadow-sm">+ Новый договор</button>`;
             }
-
-            row.innerHTML = `
-                ${removeBtn}
-                <div class="grid grid-cols-3 gap-2 mb-2 pr-20">
-                    <div class="col-span-1">
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Код</label>
-                        <input type="text" class="i-code w-full border border-gray-300 rounded p-1.5 text-xs bg-white" required placeholder="MAT-001" value="${itemData ? (itemData.material_code || '') : ''}">
-                    </div>
-                    <div class="col-span-2">
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Наименование</label>
-                        <input type="text" class="i-name w-full border border-gray-300 rounded p-1.5 text-xs bg-white" required placeholder="Товар или услуга" value="${itemData ? (itemData.name || '') : ''}">
-                    </div>
-                </div>
-                <div class="grid grid-cols-3 gap-2 mb-2">
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Кол-во</label>
-                        <input type="number" step="0.01" class="i-qty w-full border border-gray-300 rounded p-1.5 text-xs bg-white" required min="0.01" value="${itemData ? (itemData.requested_quantity || 1) : 1}">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Ед. изм.</label>
-                        <input type="text" class="i-unit w-full border border-gray-300 rounded p-1.5 text-xs bg-white" required value="${itemData ? (itemData.unit || 'шт') : 'шт'}">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-gray-600 mb-1">Аналог</label>
-                        <select class="i-analog w-full border border-gray-300 rounded p-1.5 text-xs bg-white">
-                            <option value="true" ${itemData && itemData.allow_analog ? 'selected' : ''}>Да</option>
-                            <option value="false" ${itemData && !itemData.allow_analog ? 'selected' : ''}>Нет</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="mb-2">
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Спецификация (характеристики)</label>
-                    <textarea class="i-spec w-full border border-gray-300 rounded p-1.5 text-xs bg-white resize-y" rows="2" placeholder="Дополнительные характеристики с новой строки...">${itemData ? (itemData.specification || '') : ''}</textarea>
-                </div>
-                <div class="mt-2 pt-2 border-t border-gray-200">
-                    <label class="block text-xs font-semibold text-gray-600 mb-1">Техническое задание (ТЗ) для этой позиции</label>
-                    ${fileBoxHtml}
-                    <input type="file" class="i-file w-full border border-gray-200 rounded p-1 text-xs bg-white text-gray-500">
-                </div>
-            `;
-            itemsContainer.appendChild(row);
+            renderApp();
         }
 
-        fabAdd.addEventListener('click', () => {
+        document.getElementById('fabAddOrder').addEventListener('click', openOrderModal);
+
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+        async function fetchData() {
+            try {
+                const [resOrd, resCon] = await Promise.all([ fetch('/api/orders'), fetch('/api/contracts') ]);
+                ordersCache = await resOrd.json();
+                contractsCache = await resCon.json();
+                renderApp();
+            } catch (err) {
+                document.getElementById('mainContent').innerHTML = '<p class="text-red-500 text-center mt-10">Ошибка загрузки данных</p>';
+            }
+        }
+
+        function renderApp() {
+            const main = document.getElementById('mainContent');
+            if (currentTab === 'orders') renderOrders(main);
+            else renderContracts(main);
+        }
+
+        // ================= ЗАКАЗЫ =================
+        function openOrderModal() {
             editingOrderId = null;
             document.getElementById('orderModalTitle').innerText = 'Создание нового заказа';
-            document.getElementById('submitBtn').innerText = 'Создать заказ';
-            orderForm.reset();
-            
-            document.getElementById('enterprise').value = '';
-            
-            itemsContainer.innerHTML = '';
+            document.getElementById('orderForm').reset();
+            document.getElementById('itemsContainer').innerHTML = '';
             addItemRow();
-            
-            modal.classList.remove('hidden');
-        });
-
-        closeModalBtn.addEventListener('click', () => {
-            modal.classList.add('hidden');
-            orderForm.reset();
-        });
-
-        function closeDetailModal() {
-            document.getElementById('detailModal').classList.add('hidden');
+            document.getElementById('orderModal').classList.remove('hidden');
         }
 
-        function openEditForm(orderId) {
-            closeDetailModal();
-            const order = ordersCache.find(o => o.id === orderId);
-            if (!order) return;
+        function addItemRow(data = null) {
+            const row = document.createElement('div');
+            row.className = 'item-row bg-gray-50 p-3 rounded-lg border border-gray-200 relative shadow-sm';
+            let fileBox = data && data.tech_spec_file && data.tech_spec_file !== '-' && data.tech_spec_file !== 'Не прикреплен' 
+                ? `<div class="mb-1 text-xs text-blue-700 bg-blue-50 px-2 py-1 rounded flex justify-between">
+                    <span class="c-file" data-file="${data.tech_spec_file}">${data.tech_spec_file}</span>
+                    <button type="button" onclick="this.parentElement.remove()" class="text-red-500">✕</button>
+                   </div>` : '';
 
-            editingOrderId = order.id;
-            document.getElementById('orderModalTitle').innerText = `Редактирование заказа #${order.id}`;
-            document.getElementById('submitBtn').innerText = 'Сохранить изменения';
-
-            document.getElementById('enterprise').value = order.enterprise || '';
-            document.getElementById('priority').value = order.priority || 'Средний';
-            document.getElementById('reqDept').value = order.requesting_dept_id || '';
-            document.getElementById('execDept').value = order.executing_dept_id || '';
-            document.getElementById('plannedDate').value = order.planned_date || '';
-            document.getElementById('orderComment').value = order.comment || '';
-
-            itemsContainer.innerHTML = '';
-            if (order.items && order.items.length > 0) {
-                order.items.forEach(item => addItemRow(item));
-            } else {
-                addItemRow();
-            }
-
-            modal.classList.remove('hidden');
+            row.innerHTML = `
+                <button type="button" onclick="this.closest('.item-row').remove()" class="absolute top-2 right-2 text-red-500 text-xs font-bold px-2 py-0.5 border border-red-200 bg-white rounded shadow-sm">✕ Удалить</button>
+                <div class="grid grid-cols-3 gap-2 mb-2 pr-20">
+                    <div class="col-span-1"><label class="text-xs">Код</label><input type="text" class="i-code w-full border rounded p-1.5 text-xs" required value="${data?.material_code || ''}"></div>
+                    <div class="col-span-2"><label class="text-xs">Наименование</label><input type="text" class="i-name w-full border rounded p-1.5 text-xs" required value="${data?.name || ''}"></div>
+                </div>
+                <div class="grid grid-cols-3 gap-2 mb-2">
+                    <div><label class="text-xs">Кол-во</label><input type="number" class="i-qty w-full border rounded p-1.5 text-xs" required min="0.01" value="${data?.requested_quantity || 1}"></div>
+                    <div><label class="text-xs">Ед. изм.</label><input type="text" class="i-unit w-full border rounded p-1.5 text-xs" required value="${data?.unit || 'шт'}"></div>
+                    <div><label class="text-xs">Аналог</label><select class="i-analog w-full border rounded p-1.5 text-xs"><option value="true" ${data?.allow_analog===true?'selected':''}>Да</option><option value="false" ${data?.allow_analog===false?'selected':''}>Нет</option></select></div>
+                </div>
+                <div class="mb-2"><label class="text-xs">Спецификация</label><textarea class="i-spec w-full border rounded p-1.5 text-xs resize-y" rows="1">${data?.specification || ''}</textarea></div>
+                <div class="mt-2 pt-2 border-t"><label class="text-xs">ТЗ файла</label>${fileBox}<input type="file" class="i-file w-full border rounded p-1 text-xs"></div>
+            `;
+            document.getElementById('itemsContainer').appendChild(row);
         }
 
-        orderForm.addEventListener('submit', async (e) => {
-            e.preventDefault(); 
-            
+        document.getElementById('orderForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
             const itemsList = [];
             document.querySelectorAll('.item-row').forEach(row => {
-                const fileInput = row.querySelector('.i-file');
-                const currentFileBox = row.querySelector('.current-file-name');
-                let finalFileName = 'Не прикреплен';
-                
-                if (fileInput.files.length > 0) {
-                    finalFileName = fileInput.files[0].name;
-                } else if (currentFileBox) {
-                    finalFileName = currentFileBox.getAttribute('data-filename');
-                }
+                const fInput = row.querySelector('.i-file');
+                const cFile = row.querySelector('.c-file');
+                let fname = 'Не прикреплен';
+                if(fInput.files.length > 0) fname = fInput.files[0].name;
+                else if (cFile) fname = cFile.getAttribute('data-file');
 
                 itemsList.push({
                     material_code: row.querySelector('.i-code').value.trim() || '-',
                     name: row.querySelector('.i-name').value.trim(),
                     unit: row.querySelector('.i-unit').value.trim(),
                     requested_quantity: parseFloat(row.querySelector('.i-qty').value) || 1,
-                    stock_balance: 0,
                     allow_analog: row.querySelector('.i-analog').value === 'true',
-                    manufacturer: '-',
-                    supplier: '-',
                     specification: row.querySelector('.i-spec').value.trim() || '-',
-                    tech_spec_file: finalFileName
+                    tech_spec_file: fname
                 });
             });
 
-            if (itemsList.length === 0) {
-                alert("Ошибка: в заказе должна быть хотя бы одна позиция!");
-                return;
-            }
+            if(itemsList.length === 0) return alert('Добавьте позиции!');
 
-            const orderData = {
-                id: editingOrderId ? editingOrderId : "", 
+            const payload = {
+                id: editingOrderId || "",
                 enterprise: document.getElementById('enterprise').value,
                 requesting_dept_id: document.getElementById('reqDept').value,
                 executing_dept_id: document.getElementById('execDept').value,
                 priority: document.getElementById('priority').value,
-                planned_date: document.getElementById('plannedDate').value || 'Не указана',
-                comment: document.getElementById('orderComment').value || '',
+                planned_date: document.getElementById('plannedDate').value,
+                comment: document.getElementById('orderComment').value,
                 items: itemsList
             };
 
@@ -447,482 +429,321 @@ HTML_CONTENT = """
             const method = editingOrderId ? 'PUT' : 'POST';
 
             try {
-                const response = await fetch(url, {
-                    method: method,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(orderData)
-                });
-                if (response.ok) { 
-                    modal.classList.add('hidden'); 
-                    orderForm.reset(); 
-                    loadApp(); 
-                } else { 
-                    alert('Ошибка при сохранении заказа на сервере'); 
-                }
-            } catch (error) { 
-                alert('Ошибка сети'); 
-            }
+                const res = await fetch(url, { method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+                if(res.ok) { closeModal('orderModal'); fetchData(); } else alert('Ошибка сервера');
+            } catch(e) { alert('Ошибка сети'); }
         });
 
-        function downloadTechSpec(orderId, fileName) {
-            const content = `ТЕХНИЧЕСКОЕ ЗАДАНИЕ\\nЗаказ №: ${orderId}\\nФайл: ${fileName}\\nДата: ${new Date().toLocaleString()}`;
-            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = fileName;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        }
-
-        async function changeStatus(orderId, newStatus, rejectComment = null, supplierData = {}) {
-            try {
-                const payload = { status: newStatus, reject_comment: rejectComment, ...supplierData };
-                const response = await fetch(`/api/orders/${orderId}/status`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (response.ok) {
-                    closeDetailModal();
-                    loadApp();
-                } else {
-                    alert('Ошибка при смене статуса');
-                }
-            } catch (error) {
-                alert('Ошибка сети.');
-            }
-        }
-        
-        async function updateContractStatus(orderId, contractId, newStatus) {
-            try {
-                const response = await fetch(`/api/orders/${orderId}/contracts/${contractId}/status`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ status: newStatus })
-                });
-                if (response.ok) {
-                    closeDetailModal();
-                    loadApp();
-                } else {
-                    alert('Ошибка при обновлении статуса договора');
-                }
-            } catch (error) {
-                alert('Ошибка сети.');
-            }
-        }
-
-        function rejectOrder(orderId) {
-            const commentInput = document.getElementById('rejectComment_' + orderId);
-            const comment = commentInput ? commentInput.value.trim() : '';
-            if (!comment) {
-                alert('Пожалуйста, обязательно укажите причину отказа!');
-                commentInput.focus();
+        function renderOrders(container) {
+            if(ordersCache.length === 0) {
+                container.innerHTML = '<p class="text-gray-500 text-center mt-10">Заказов пока нет</p>';
                 return;
             }
-            changeStatus(orderId, 'Черновик', comment);
+            let html = '<div class="space-y-4 max-w-3xl mx-auto pb-10">';
+            ordersCache.forEach(o => {
+                let pColor = o.priority==='Высокий'?'bg-red-100 text-red-700':'bg-gray-100 text-gray-700';
+                
+                let sColor = 'bg-gray-200';
+                if(o.status==='Черновик') sColor='bg-gray-200';
+                if(o.status==='На согласовании') sColor='bg-yellow-100 text-yellow-700';
+                if(o.status==='Принят в работу') sColor='bg-purple-100 text-purple-700';
+                if(o.status==='В процессе закупки') sColor='bg-indigo-100 text-indigo-700';
+                if(o.status==='Заказан поставщику') sColor='bg-cyan-100 text-cyan-700';
+                if(o.status==='На складе') sColor='bg-orange-100 text-orange-700';
+                if(o.status==='Выполнен') sColor='bg-green-100 text-green-700';
+
+                let reqTotal=0, ordTotal=0;
+                o.items.forEach(i => {
+                    reqTotal += i.requested_quantity;
+                    if(i.contract_items) i.contract_items.forEach(ci => ordTotal += ci.ordered_quantity);
+                });
+
+                let progress = o.status!=='Черновик'&&o.status!=='На согласовании' 
+                    ? `<span class="ml-2 text-xs font-bold px-1.5 py-0.5 rounded ${ordTotal>=reqTotal?'bg-green-100 text-green-700':'bg-blue-100 text-blue-700'}">По договорам: ${ordTotal}/${reqTotal}</span>` : '';
+
+                html += `
+                    <div onclick="openOrderDetail('${o.id}')" class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-blue-400 cursor-pointer">
+                        <div class="flex justify-between mb-2">
+                            <div>
+                                <h3 class="font-bold text-gray-900 inline-block mr-2">Заказ #${o.id}</h3>
+                                <span class="text-xs font-semibold px-2 py-0.5 rounded ${pColor}">${o.priority}</span>
+                            </div>
+                            <span class="text-xs font-bold px-2 py-1 rounded ${sColor}">${o.status}</span>
+                        </div>
+                        <p class="text-xs text-gray-500 mb-2">🏭 ${o.enterprise||'Не указ.'} | ${o.requesting_dept_id} ➔ ${o.executing_dept_id}</p>
+                        <div class="text-xs flex gap-3 flex-wrap">
+                            <span>📅 ${o.planned_date||'-'}</span>
+                            ${progress}
+                        </div>
+                    </div>
+                `;
+            });
+            container.innerHTML = html + '</div>';
         }
 
-        // --- НОВАЯ ФОРМА ДОБАВЛЕНИЯ ДОГОВОРА С ВЫБОРОМ ПОЗИЦИИ ---
-        function showSupplierForm(orderId) {
-            const order = ordersCache.find(o => o.id === orderId);
+        function openOrderDetail(oId) {
+            const o = ordersCache.find(x => x.id === oId);
+            if(!o) return;
+            document.getElementById('ordDetTitle').innerText = `Заказ #${o.id} (${o.status})`;
             
-            let optionsHtml = '';
-            let firstMax = 0;
+            let html = `
+                <div class="grid grid-cols-2 gap-2 text-xs bg-gray-50 p-2 rounded mb-3">
+                    <div><b>Создан:</b> ${new Date(o.created_at).toLocaleDateString()}</div>
+                    <div><b>Утвержден:</b> ${o.approved_at ? new Date(o.approved_at).toLocaleDateString() : '-'}</div>
+                </div>
+                <p><b>Направление:</b> ${o.requesting_dept_id} ➔ ${o.executing_dept_id}</p>
+                ${o.comment ? `<div class="text-xs bg-red-50 text-red-700 p-2 rounded mt-2 border-l-2 border-red-400 whitespace-pre-wrap">${o.comment}</div>` : ''}
+                <hr class="my-3">
+                <h4 class="font-bold">Позиции:</h4>
+                <div class="space-y-2">
+            `;
             
-            // Собираем доступные позиции
-            order.items.forEach(item => {
-                let orderedForThisItem = 0;
-                if (order.contracts) {
-                    order.contracts.forEach(c => {
-                        if (c.item_id === item.id) orderedForThisItem += c.ordered_quantity;
+            o.items.forEach(i => {
+                let ordered = 0;
+                let cBadges = '';
+                if(i.contract_items && i.contract_items.length > 0) {
+                    i.contract_items.forEach(ci => {
+                        ordered += ci.ordered_quantity;
+                        cBadges += `<span class="bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded mr-1" title="Договор #${ci.contract_id}">Заказано: ${ci.ordered_quantity}</span>`;
                     });
                 }
-                let rem = item.requested_quantity - orderedForThisItem;
-                if (rem > 0) {
-                    if (optionsHtml === '') firstMax = rem;
-                    optionsHtml += `<option value="${item.id}" data-name="${item.name}" data-max="${rem}">${item.name} (Осталось: ${rem} ${item.unit})</option>`;
-                }
-            });
+                
+                let rem = i.requested_quantity - ordered;
+                let stateBadge = rem <= 0 ? `<span class="text-green-600 text-xs font-bold">✓ Закрыто</span>` : `<span class="text-yellow-600 text-xs font-bold">Остаток: ${rem}</span>`;
 
-            if (optionsHtml === '') {
-                alert('Для всех позиций в этом заказе уже заключены договоры на полный объем!');
-                return;
-            }
-
-            const footer = document.getElementById('detModalFooter');
-            footer.innerHTML = `
-                <div class="w-full bg-indigo-50 p-4 rounded-lg border border-indigo-200 shadow-inner">
-                    <h4 class="font-bold text-indigo-800 mb-3 border-b border-indigo-200 pb-2">Оформление договора поставки</h4>
-                    <div class="grid grid-cols-2 gap-3 mb-4">
-                        <div class="col-span-2">
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Позиция для заказа</label>
-                            <select id="supItemSelect" class="w-full border border-indigo-300 rounded p-2 text-sm bg-white font-bold text-indigo-900 shadow-sm" onchange="updateSupItemOptions()">
-                                ${optionsHtml}
-                            </select>
+                html += `
+                    <div class="border p-2 rounded bg-gray-50 text-xs">
+                        <div class="flex justify-between font-bold text-sm mb-1">
+                            <span>${i.name} (${i.material_code})</span>
+                            <span>${i.requested_quantity} ${i.unit}</span>
                         </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Поставщик</label>
-                            <input type="text" id="supName" class="w-full border border-gray-300 rounded p-1.5 text-sm" placeholder="Название компании" required>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Номер договора</label>
-                            <input type="text" id="supContract" class="w-full border border-gray-300 rounded p-1.5 text-sm" placeholder="№..." required>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Дата договора</label>
-                            <input type="date" id="supDate" class="w-full border border-gray-300 rounded p-1.5 text-sm" required>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Валюта</label>
-                            <select id="supCurrency" class="w-full border border-gray-300 rounded p-1.5 text-sm bg-white">
-                                <option value="AZN">AZN (Манат)</option>
-                                <option value="USD">USD (Доллар)</option>
-                                <option value="EUR">EUR (Евро)</option>
-                                <option value="RUB">RUB (Рубль)</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Инкотермс</label>
-                            <select id="supInco" class="w-full border border-gray-300 rounded p-1.5 text-sm bg-white">
-                                <option>EXW</option>
-                                <option>FCA</option>
-                                <option>CPT</option>
-                                <option>CIP</option>
-                                <option>DAP</option>
-                                <option>DDP</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label id="supQtyLabel" class="block text-xs font-semibold text-gray-700 mb-1">Кол-во ед. (макс. ${firstMax})</label>
-                            <input type="number" id="supQty" class="w-full border border-gray-300 rounded p-1.5 text-sm font-bold text-blue-700" value="${firstMax}" data-max="${firstMax}" oninput="calcSum()" required>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Цена за ед.</label>
-                            <input type="number" id="supPrice" step="0.01" class="w-full border border-gray-300 rounded p-1.5 text-sm" placeholder="0.00" oninput="calcSum()" required>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-700 mb-1">Сумма по договору</label>
-                            <input type="text" id="supTotal" class="w-full border border-indigo-200 bg-indigo-100 rounded p-1.5 text-sm font-bold text-indigo-900 outline-none" readonly value="0.00">
+                        <div class="flex justify-between items-center mt-2 border-t pt-1">
+                            <div>${cBadges || '<span class="text-gray-400 italic">Нет договоров</span>'}</div>
+                            ${stateBadge}
                         </div>
                     </div>
-                    <div class="flex justify-end gap-2">
-                        <button onclick="openDetail('${orderId}')" class="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">Отмена</button>
-                        <button onclick="submitSupplierOrder('${orderId}')" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow">Сохранить договор</button>
-                    </div>
-                </div>
-            `;
-        }
-
-        function submitSupplierOrder(orderId) {
-            const order = ordersCache.find(o => o.id === orderId);
-            
-            const sel = document.getElementById('supItemSelect');
-            const opt = sel.options[sel.selectedIndex];
-            const itemId = parseInt(opt.value);
-            const itemName = opt.getAttribute('data-name');
-
-            let newQty = parseFloat(document.getElementById('supQty').value) || 0;
-            let supName = document.getElementById('supName').value.trim();
-
-            if (!supName || !document.getElementById('supContract').value.trim() || !document.getElementById('supDate').value || newQty <= 0) {
-                alert('Пожалуйста, корректно заполните все обязательные поля!');
-                return;
-            }
-
-            // Анализируем остатки, чтобы понять, какой статус дать заказу
-            let item_reqs = {};
-            let item_ords = {};
-            order.items.forEach(i => {
-                item_reqs[i.id] = i.requested_quantity;
-                item_ords[i.id] = 0;
+                `;
             });
-            if (order.contracts) {
-                order.contracts.forEach(c => {
-                    if (item_ords[c.item_id] !== undefined) item_ords[c.item_id] += c.ordered_quantity;
-                });
-            }
-            
-            // Добавляем текущую закупку
-            item_ords[itemId] += newQty;
-            
-            let allCovered = true;
-            for (let id in item_reqs) {
-                if (item_ords[id] < item_reqs[id]) {
-                    allCovered = false;
-                    break;
-                }
-            }
+            html += '</div>';
+            document.getElementById('ordDetBody').innerHTML = html;
 
-            const nextStatus = allCovered ? 'Заказан поставщику' : 'В процессе закупки';
-
-            const supplierData = {
-                item_id: itemId,
-                item_name: itemName,
-                supplier_name: supName,
-                contract_number: document.getElementById('supContract').value.trim(),
-                contract_date: document.getElementById('supDate').value,
-                currency: document.getElementById('supCurrency').value,
-                incoterms: document.getElementById('supInco').value,
-                ordered_quantity: newQty,
-                unit_price: parseFloat(document.getElementById('supPrice').value) || 0,
-                total_amount: parseFloat(document.getElementById('supTotal').value) || 0
-            };
-            
-            changeStatus(orderId, nextStatus, null, supplierData);
+            let footer = '';
+            if(o.status === 'Черновик') {
+                footer = `
+                    <button onclick="editOrder('${o.id}')" class="px-4 py-2 bg-blue-100 text-blue-700 rounded font-bold">✏️ Изменить</button>
+                    <button onclick="updateOrderStatus('${o.id}', 'На согласовании')" class="px-4 py-2 bg-yellow-500 text-white rounded font-bold">На согласование</button>
+                `;
+            } else if (o.status === 'На согласовании') {
+                footer = `
+                    <button onclick="rejectOrder('${o.id}')" class="px-4 py-2 bg-red-600 text-white rounded font-bold">❌ Отказать</button>
+                    <button onclick="updateOrderStatus('${o.id}', 'Принят в работу')" class="px-4 py-2 bg-purple-600 text-white rounded font-bold">Утвердить</button>
+                `;
+            } else {
+                footer = `<span class="text-sm text-gray-500 italic">Для закупки товаров по этому заказу перейдите во вкладку "Договоры".</span>`;
+            }
+            document.getElementById('ordDetFooter').innerHTML = footer;
+            document.getElementById('orderDetailModal').classList.remove('hidden');
         }
 
-        async function loadApp() {
-            const main = document.getElementById('mainContent');
+        function editOrder(oId) {
+            closeModal('orderDetailModal');
+            const o = ordersCache.find(x => x.id === oId);
+            editingOrderId = o.id;
+            document.getElementById('orderModalTitle').innerText = `Редактирование #${o.id}`;
+            document.getElementById('enterprise').value = o.enterprise||'';
+            document.getElementById('priority').value = o.priority;
+            document.getElementById('reqDept').value = o.requesting_dept_id;
+            document.getElementById('execDept').value = o.executing_dept_id;
+            document.getElementById('plannedDate').value = o.planned_date;
+            document.getElementById('orderComment').value = o.comment||'';
+            document.getElementById('itemsContainer').innerHTML = '';
+            o.items.forEach(i => addItemRow(i));
+            document.getElementById('orderModal').classList.remove('hidden');
+        }
+
+        async function updateOrderStatus(id, st, comment=null) {
             try {
-                const response = await fetch('/api/orders');
-                if (!response.ok) throw new Error('Ошибка сети');
-                const orders = await response.json();
-                ordersCache = orders;
-                
-                if (!orders || orders.length === 0) {
-                    main.innerHTML = '<div class="flex items-center justify-center h-full"><p class="text-gray-500">У вас пока нет заказов</p></div>';
-                    return;
-                }
-                
-                let html = '<div class="space-y-4 max-w-2xl mx-auto pb-10">';
-                orders.forEach(order => {
-                    let priorityColor = 'bg-gray-100 text-gray-700';
-                    if (order.priority === 'Высокий') priorityColor = 'bg-red-100 text-red-700';
-                    if (order.priority === 'Средний') priorityColor = 'bg-amber-100 text-amber-700';
-
-                    let statusColor = 'bg-blue-100 text-blue-700';
-                    if (order.status === 'На согласовании') statusColor = 'bg-yellow-100 text-yellow-700';
-                    if (order.status === 'Принят в работу') statusColor = 'bg-purple-100 text-purple-700';
-                    if (order.status === 'В процессе закупки') statusColor = 'bg-indigo-100 text-indigo-700';
-                    if (order.status === 'Заказан поставщику') statusColor = 'bg-teal-100 text-teal-700';
-                    if (order.status === 'Выполнен') statusColor = 'bg-green-100 text-green-700';
-
-                    let itemsHtml = '';
-                    let totalRequestedQty = 0;
-                    if (order.items && order.items.length > 0) {
-                        itemsHtml = '<div class="mt-3 pt-3 border-t border-gray-100 space-y-2">';
-                        order.items.forEach((item, index) => {
-                            totalRequestedQty += item.requested_quantity;
-                            let tzText = item.tech_spec_file && item.tech_spec_file !== '-' && item.tech_spec_file !== 'Не прикреплен' 
-                                ? `<span class="ml-2 text-xs text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">📎 ТЗ: ${item.tech_spec_file}</span>` : '';
-
-                            itemsHtml += `
-                                <div class="bg-gray-50 p-2.5 rounded-lg text-sm border-l-4 border-blue-400">
-                                    <div class="flex justify-between items-start font-medium text-gray-900">
-                                        <div class="flex flex-col">
-                                            <span>${index + 1}. ${item.name} <span class="text-xs text-gray-500 font-normal">(${item.material_code})</span></span>
-                                            ${tzText ? `<div class="mt-1">${tzText}</div>` : ''}
-                                        </div>
-                                        <span>${item.requested_quantity} ${item.unit}</span>
-                                    </div>
-                                </div>
-                            `;
-                        });
-                        itemsHtml += '</div>';
-                    }
-
-                    let createdStr = order.created_at ? new Date(order.created_at).toLocaleDateString() : '';
-                    let approvedStr = order.approved_at ? `<span class="ml-2 text-purple-600">✓ Утв: ${new Date(order.approved_at).toLocaleDateString()}</span>` : '';
-
-                    html += `
-                        <div onclick="openDetail('${order.id}')" class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-blue-400 cursor-pointer transition">
-                            <div class="flex justify-between items-start mb-2">
-                                <div>
-                                    <div class="flex items-center gap-2 flex-wrap">
-                                        <h3 class="font-bold text-gray-900">Заказ #${order.id || '?'}</h3>
-                                        <span class="text-xs font-semibold px-2 py-0.5 rounded ${priorityColor}">Приоритет: ${order.priority || 'Средний'}</span>
-                                    </div>
-                                    <p class="text-xs text-gray-500 mt-1">🏭 ${order.enterprise || 'Не указано'} | ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
-                                </div>
-                                <span class="text-xs font-bold px-2.5 py-1 rounded-full ${statusColor}">${order.status}</span>
-                            </div>
-                            <div class="text-xs text-gray-600 flex gap-4 flex-wrap mb-2 items-center">
-                                ${order.planned_date ? `<span>📅 Необходимая дата: <b class="text-red-600">${order.planned_date}</b></span>` : ''}
-                                <span>🕒 Создан: ${createdStr} ${approvedStr}</span>
-                            </div>
-                            ${order.comment ? `<div class="text-xs text-gray-500 italic mb-2 whitespace-pre-wrap line-clamp-2">💬 "${order.comment}"</div>` : ''}
-                            ${itemsHtml}
-                        </div>
-                    `;
-                });
-                html += '</div>';
-                main.innerHTML = html;
-            } catch (error) {
-                main.innerHTML = '<div class="flex items-center justify-center h-full"><p class="text-red-500">Ошибка подключения к серверу</p></div>';
-            }
+                await fetch(`/api/orders/${id}/status`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({status: st, reject_comment: comment}) });
+                closeModal('orderDetailModal');
+                fetchData();
+            } catch(e) {}
         }
 
-        function openDetail(orderId) {
-            const order = ordersCache.find(o => o.id === orderId);
-            if (!order) return;
+        function rejectOrder(id) {
+            let reason = prompt('Причина отказа:');
+            if(reason) updateOrderStatus(id, 'Черновик', reason);
+        }
 
-            document.getElementById('detModalTitle').innerText = `Детали заказа #${order.id}`;
+        // ================= ДОГОВОРЫ =================
+        function openContractModal() {
+            document.getElementById('contractForm').reset();
+            document.getElementById('cRowsContainer').innerHTML = '';
+            populateContractItemsDropdown();
+            document.getElementById('contractModal').classList.remove('hidden');
+        }
+
+        function populateContractItemsDropdown() {
+            let opts = '<option value="" disabled selected>Выберите позицию (Остаток > 0)</option>';
+            ordersCache.forEach(o => {
+                if(o.status === 'Черновик' || o.status === 'На согласовании') return;
+                o.items.forEach(i => {
+                    let ord = 0;
+                    if(i.contract_items) i.contract_items.forEach(c => ord += c.ordered_quantity);
+                    let rem = i.requested_quantity - ord;
+                    if(rem > 0) {
+                        opts += `<option value="${i.id}" data-max="${rem}" data-name="${i.name}" data-order="${o.id}">Заказ ${o.id} | ${i.name} (Ост: ${rem})</option>`;
+                    }
+                });
+            });
+            document.getElementById('cAvailItems').innerHTML = opts;
+        }
+
+        function addContractRow() {
+            const sel = document.getElementById('cAvailItems');
+            if(!sel.value) return alert('Выберите позицию!');
+            const opt = sel.options[sel.selectedIndex];
+            const iid = opt.value;
             
-            let statusBadge = `<span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold">${order.status}</span>`;
-            if (order.status === 'На согласовании') statusBadge = `<span class="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded font-semibold">${order.status}</span>`;
-            if (order.status === 'Принят в работу') statusBadge = `<span class="px-2 py-0.5 bg-purple-100 text-purple-700 rounded font-semibold">${order.status}</span>`;
-            if (order.status === 'В процессе закупки') statusBadge = `<span class="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded font-semibold">${order.status}</span>`;
-            if (order.status === 'Заказан поставщику') statusBadge = `<span class="px-2 py-0.5 bg-teal-100 text-teal-700 rounded font-semibold">${order.status}</span>`;
-            if (order.status === 'Выполнен') statusBadge = `<span class="px-2 py-0.5 bg-green-100 text-green-700 rounded font-semibold">${order.status}</span>`;
+            // Check if already added
+            if(document.querySelector(`.c-row[data-iid="${iid}"]`)) return alert('Эта позиция уже добавлена в список ниже!');
 
-            let createdStr = order.created_at ? new Date(order.created_at).toLocaleString() : '-';
-            let approvedStr = order.approved_at ? new Date(order.approved_at).toLocaleString() : '<span class="text-gray-400 italic">Еще не утвержден</span>';
+            const max = opt.getAttribute('data-max');
+            const name = opt.getAttribute('data-name');
+            const ord = opt.getAttribute('data-order');
 
-            let itemsDetails = '';
-            let allItemsFullyOrdered = true;
-            let hasAnyRemaining = false;
+            const div = document.createElement('div');
+            div.className = `c-row bg-white border border-indigo-200 p-2 rounded flex gap-2 items-center text-sm`;
+            div.setAttribute('data-iid', iid);
+            div.innerHTML = `
+                <div class="flex-1 font-bold text-gray-700">${ord} <span class="font-normal">| ${name}</span></div>
+                <div><input type="number" class="cr-qty w-20 border rounded p-1" value="${max}" max="${max}" oninput="calcContractTotal()"></div>
+                <div><input type="number" class="cr-price w-24 border rounded p-1" placeholder="Цена" oninput="calcContractTotal()"></div>
+                <div class="font-bold text-indigo-700 w-24 text-right cr-sum">0.00</div>
+                <button type="button" onclick="this.parentElement.remove(); calcContractTotal()" class="text-red-500 font-bold ml-2">✕</button>
+            `;
+            document.getElementById('cRowsContainer').appendChild(div);
+            sel.value = "";
+        }
 
-            if (order.items) {
-                order.items.forEach((item, idx) => {
-                    
-                    let orderedForThisItem = 0;
-                    if (order.contracts) {
-                        order.contracts.forEach(c => {
-                            if (c.item_id === item.id) orderedForThisItem += c.ordered_quantity;
-                        });
-                    }
-                    
-                    let remaining = item.requested_quantity - orderedForThisItem;
-                    if (remaining > 0) hasAnyRemaining = true;
-                    if (remaining > 0) allItemsFullyOrdered = false;
+        function calcContractTotal() {
+            let total = 0;
+            document.querySelectorAll('.c-row').forEach(row => {
+                const qtyInput = row.querySelector('.cr-qty');
+                let max = parseFloat(qtyInput.getAttribute('max'));
+                let q = parseFloat(qtyInput.value)||0;
+                if(q > max) { q = max; qtyInput.value = max; alert('Превышен остаток!'); }
+                let p = parseFloat(row.querySelector('.cr-price').value)||0;
+                let sum = q * p;
+                row.querySelector('.cr-sum').innerText = sum.toFixed(2);
+                total += sum;
+            });
+            document.getElementById('cTotal').value = total.toFixed(2);
+        }
 
-                    let badge = remaining <= 0 
-                        ? `<span class="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded font-bold">Заказано полностью</span>` 
-                        : `<span class="bg-yellow-100 text-yellow-700 text-xs px-2 py-0.5 rounded font-bold">Осталось заказать: ${remaining}</span>`;
-
-                    let itemDownloadBtn = item.tech_spec_file && item.tech_spec_file !== '-' && item.tech_spec_file !== 'Не прикреплен'
-                        ? `<button onclick="downloadTechSpec('${order.id}', '${item.tech_spec_file}')" class="mt-2 inline-flex items-center gap-1 px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs font-semibold hover:bg-indigo-100 transition cursor-pointer border border-indigo-200">📥 Скачать ТЗ (${item.tech_spec_file})</button>`
-                        : '<div class="mt-2 text-gray-400 text-xs">Файл ТЗ не прикреплен</div>';
-
-                    itemsDetails += `
-                        <div class="bg-gray-50 p-3 rounded-lg border border-gray-200 space-y-1 relative">
-                            <div class="flex justify-between items-center mb-1 pr-16">
-                                <div><b>Наименование:</b> ${item.name} (${item.material_code})</div>
-                            </div>
-                            <span class="absolute top-2 right-2 text-xs font-bold text-gray-400">Позиция ${idx + 1}</span>
-                            
-                            <div class="flex justify-between items-center mt-1 bg-white p-2 rounded border border-gray-100">
-                                <span><b>Запрошено:</b> <span class="text-lg font-bold">${item.requested_quantity}</span> ${item.unit}</span>
-                                ${badge}
-                            </div>
-
-                            <div><b>Допуск аналога:</b> ${item.allow_analog ? 'Да' : 'Нет'}</div>
-                            ${item.specification && item.specification !== '-' ? `<div class="mt-2 text-blue-800 bg-blue-100 p-2 rounded text-sm whitespace-pre-wrap font-mono border border-blue-200"><b>Спецификация:</b><br>${item.specification}</div>` : ''}
-                            ${itemDownloadBtn}
-                        </div>
-                    `;
+        document.getElementById('contractForm').addEventListener('submit', async(e) => {
+            e.preventDefault();
+            const items = [];
+            document.querySelectorAll('.c-row').forEach(row => {
+                items.push({
+                    order_item_id: parseInt(row.getAttribute('data-iid')),
+                    ordered_quantity: parseFloat(row.querySelector('.cr-qty').value),
+                    unit_price: parseFloat(row.querySelector('.cr-price').value)
                 });
-            }
+            });
+            if(items.length === 0) return alert('Добавьте позиции в договор!');
 
-            // РЕНДЕР ИСТОРИИ ДОГОВОРОВ
-            let supplierInfoHtml = '';
-            if (order.contracts && order.contracts.length > 0) {
-                supplierInfoHtml = `
-                    <hr class="my-3">
-                    <h4 class="font-bold text-indigo-800">Договоры закупки (${order.contracts.length}):</h4>
-                    <div class="space-y-2 mt-2">
+            const payload = {
+                supplier_name: document.getElementById('cSupName').value,
+                contract_number: document.getElementById('cNum').value,
+                contract_date: document.getElementById('cDate').value,
+                currency: document.getElementById('cCur').value,
+                incoterms: document.getElementById('cInco').value,
+                items: items
+            };
+
+            try {
+                const res = await fetch('/api/contracts', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+                if(res.ok) { closeModal('contractModal'); fetchData(); } else alert('Ошибка сохранения');
+            } catch(e) { alert('Ошибка сети'); }
+        });
+
+        function renderContracts(container) {
+            if(contractsCache.length === 0) {
+                container.innerHTML = '<p class="text-gray-500 text-center mt-10">Договоров пока нет</p>';
+                return;
+            }
+            let html = '<div class="space-y-4 max-w-3xl mx-auto pb-10">';
+            contractsCache.forEach(c => {
+                let sColor = c.status==='Заказан поставщику' ? 'bg-indigo-100 text-indigo-700' : (c.status==='На складе' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700');
+                html += `
+                    <div onclick="openContractDetail('${c.id}')" class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 hover:border-indigo-400 cursor-pointer">
+                        <div class="flex justify-between mb-2">
+                            <h3 class="font-bold text-indigo-900">Договор №${c.contract_number} <span class="font-normal text-gray-500">от ${c.contract_date}</span></h3>
+                            <span class="text-xs font-bold px-2 py-1 rounded ${sColor}">${c.status}</span>
+                        </div>
+                        <p class="text-sm font-medium mb-2">🏢 Поставщик: ${c.supplier_name}</p>
+                        <div class="flex justify-between text-xs text-gray-600 bg-gray-50 p-2 rounded">
+                            <span>Позиций: ${c.items.length}</span>
+                            <span class="font-bold text-sm text-gray-900">${c.total_amount} ${c.currency}</span>
+                        </div>
+                    </div>
                 `;
-                order.contracts.forEach((c, i) => {
-                    let contractStatusBadge = '';
-                    let contractActions = '';
-                    let cStatus = c.status || 'Заказан';
-                    
-                    if (cStatus === 'Заказан') {
-                        contractStatusBadge = '<span class="text-indigo-600 font-bold bg-indigo-100 px-2 py-0.5 rounded text-xs border border-indigo-200">Заказан поставщику</span>';
-                        if(order.status !== 'Выполнен') {
-                            contractActions = `<button onclick="updateContractStatus('${order.id}', ${c.id}, 'На складе')" class="px-3 py-1.5 bg-orange-500 text-white rounded-lg text-xs font-bold hover:bg-orange-600 shadow-sm">📦 Принять на склад</button>`;
-                        }
-                    } else if (cStatus === 'На складе') {
-                        contractStatusBadge = '<span class="text-orange-600 font-bold bg-orange-100 px-2 py-0.5 rounded text-xs border border-orange-200">На складе</span>';
-                        if(order.status !== 'Выполнен') {
-                            contractActions = `<button onclick="updateContractStatus('${order.id}', ${c.id}, 'Выполнен')" class="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 shadow-sm">✅ Выдать (Завершить)</button>`;
-                        }
-                    } else if (cStatus === 'Выполнен') {
-                        contractStatusBadge = '<span class="text-green-600 font-bold bg-green-100 px-2 py-0.5 rounded text-xs border border-green-200">Выдан / Завершен</span>';
-                    }
+            });
+            container.innerHTML = html + '</div>';
+        }
 
-                    supplierInfoHtml += `
-                        <div class="bg-indigo-50 p-3 rounded-lg border border-indigo-200 text-sm space-y-1 relative">
-                            <div class="flex justify-between items-center mb-2">
-                                <span class="font-bold text-indigo-800 text-base">Договор ${i+1}</span>
-                                ${contractStatusBadge}
-                            </div>
-                            <p><b>Позиция:</b> <span class="bg-white px-2 py-0.5 rounded border font-medium">${c.item_name}</span></p>
-                            <p><b>Поставщик:</b> ${c.supplier_name}</p>
-                            <p><b>Договор:</b> №${c.contract_number} от ${c.contract_date}</p>
-                            <p><b>Фактически заказано:</b> <span class="text-indigo-700 font-bold">${c.ordered_quantity} ед.</span></p>
-                            <div class="flex justify-between items-center mt-2 pt-2 border-t border-indigo-100">
-                                <p><b>Сумма:</b> <span class="font-bold text-lg">${c.total_amount} ${c.currency}</span></p>
-                                <div>${contractActions}</div>
-                            </div>
-                        </div>
-                    `;
-                });
-                supplierInfoHtml += `</div>`;
-            }
-
-            document.getElementById('detModalBody').innerHTML = `
+        function openContractDetail(cId) {
+            const c = contractsCache.find(x => x.id === parseInt(cId));
+            if(!c) return;
+            document.getElementById('conDetTitle').innerText = `Договор №${c.contract_number}`;
+            
+            let html = `
+                <div class="grid grid-cols-2 gap-2 text-sm bg-indigo-50 p-3 rounded mb-3 border border-indigo-100">
+                    <div><b>Поставщик:</b> ${c.supplier_name}</div>
+                    <div><b>Дата:</b> ${c.contract_date}</div>
+                    <div><b>Условия:</b> ${c.incoterms}, ${c.currency}</div>
+                    <div><b>Сумма:</b> <span class="font-bold text-indigo-700 text-base">${c.total_amount}</span></div>
+                </div>
+                <h4 class="font-bold mt-4 mb-2">Включенные позиции:</h4>
                 <div class="space-y-2">
-                    <div class="flex justify-between items-center">
-                        <p><b>Статус заказа:</b> ${statusBadge}</p>
-                    </div>
-                    <div class="grid grid-cols-2 gap-2 text-xs bg-gray-50 p-2 rounded border border-gray-100">
-                        <div><b>Дата создания:</b><br>${createdStr}</div>
-                        <div><b>Дата утверждения:</b><br>${approvedStr}</div>
-                    </div>
-                    <p><b>Предприятие:</b> ${order.enterprise || 'Не указано'}</p>
-                    <p><b>Направление:</b> ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
-                    <p><b>Приоритет:</b> ${order.priority}</p>
-                    <p><b>Необходимая дата:</b> <span class="text-red-600 font-bold">${order.planned_date || 'Не указана'}</span></p>
-                    ${order.comment ? `<div class="mt-2 text-red-600"><b>Комментарий/История:</b><div class="whitespace-pre-wrap text-sm border-l-2 border-red-400 pl-2 mt-1 bg-red-50 py-1 pr-1">${order.comment}</div></div>` : ''}
-                    
-                    <hr class="my-2">
-                    <div class="flex justify-between items-center">
-                        <h4 class="font-bold text-gray-800">Запрошенные позиции:</h4>
-                    </div>
-                    <div class="space-y-2 mt-2">
-                        ${itemsDetails}
-                    </div>
-                    ${supplierInfoHtml}
-                </div>
             `;
-
-            let leftActionButtons = '';
-            let rightActionButtons = `<button onclick="closeDetailModal()" class="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Закрыть</button>`;
-            let extraRejectHtml = '';
             
-            if (order.status === 'Черновик') {
-                leftActionButtons = `<button onclick="openEditForm('${order.id}')" class="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 shadow">✏️ Редактировать</button>`;
-                rightActionButtons += `<button onclick="changeStatus('${order.id}', 'На согласовании')" class="px-4 py-2 text-sm font-medium text-white bg-yellow-500 rounded-lg hover:bg-yellow-600 shadow">Отправить на согласование</button>`;
-            } else if (order.status === 'На согласовании') {
-                extraRejectHtml = `
-                    <div class="w-full bg-red-50 p-3 rounded-lg border border-red-200 mb-2">
-                        <label class="block text-xs font-semibold text-red-700 mb-1">Причина отказа (обязательно):</label>
-                        <textarea id="rejectComment_${order.id}" rows="2" placeholder="Опишите причину отклонения..." class="w-full border border-red-300 rounded-lg p-2 text-sm outline-none focus:ring-1 focus:ring-red-500 bg-white text-gray-800 resize-y"></textarea>
+            c.items.forEach(ci => {
+                html += `
+                    <div class="border p-2 rounded flex justify-between items-center text-xs">
+                        <div>
+                            <span class="font-bold text-gray-800 border bg-white px-1 mr-1">Заказ #${ci.order_item.order_id}</span>
+                            ${ci.order_item.name}
+                        </div>
+                        <div class="text-right">
+                            <div class="font-bold">${ci.ordered_quantity} шт.</div>
+                            <div class="text-gray-500">${ci.unit_price} ${c.currency}/шт</div>
+                        </div>
                     </div>
                 `;
-                rightActionButtons += `<button onclick="rejectOrder('${order.id}')" class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 shadow">❌ Отказать</button>`;
-                rightActionButtons += `<button onclick="changeStatus('${order.id}', 'Принят в работу')" class="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 shadow">✅ Утвердить (В работу)</button>`;
-            } else if (order.status === 'Принят в работу' || order.status === 'В процессе закупки' || order.status === 'Заказан поставщику') {
-                if (hasAnyRemaining) {
-                    rightActionButtons += `<button onclick="showSupplierForm('${order.id}')" class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow">🛒 Добавить договор на остаток</button>`;
-                }
-            }
+            });
+            html += '</div>';
+            document.getElementById('conDetBody').innerHTML = html;
 
-            document.getElementById('detModalFooter').innerHTML = `
-                ${extraRejectHtml}
-                <div class="flex justify-between w-full items-end">
-                    <div>${leftActionButtons}</div>
-                    <div class="flex gap-2">${rightActionButtons}</div>
-                </div>
-            `;
-            document.getElementById('detailModal').classList.remove('hidden');
+            let footer = '';
+            if(c.status === 'Заказан поставщику') {
+                footer = `<button onclick="updateContractStatus(${c.id}, 'На складе')" class="px-4 py-2 bg-orange-500 text-white rounded font-bold">📦 Принять на склад</button>`;
+            } else if (c.status === 'На складе') {
+                footer = `<button onclick="updateContractStatus(${c.id}, 'Выполнен')" class="px-4 py-2 bg-green-600 text-white rounded font-bold">✅ Выдать и завершить</button>`;
+            }
+            document.getElementById('conDetFooter').innerHTML = footer;
+            document.getElementById('contractDetailModal').classList.remove('hidden');
         }
 
-        loadApp();
+        async function updateContractStatus(cId, status) {
+            try {
+                await fetch(`/api/contracts/${cId}/status`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({status: status}) });
+                closeModal('contractDetailModal');
+                fetchData();
+            } catch(e) {}
+        }
+
+        fetchData();
     </script>
 </body>
 </html>
@@ -932,69 +753,74 @@ HTML_CONTENT = """
 async def web_app():
     return HTMLResponse(content=HTML_CONTENT)
 
-# --- API ЭНДПОИНТЫ ---
+# --- УТИЛИТА: ПЕРЕСЧЕТ СТАТУСОВ ЗАКАЗОВ ---
+async def recalculate_orders(db: AsyncSession, order_ids: set):
+    for oid in order_ids:
+        res = await db.execute(select(OrderModel).options(
+            selectinload(OrderModel.items).selectinload(OrderItemModel.contract_items).selectinload(ContractItemModel.contract)
+        ).filter_by(id=oid))
+        order = res.scalars().first()
+        if not order: continue
+
+        total_req = sum(i.requested_quantity for i in order.items)
+        total_ord = 0
+        all_contracts_done = True
+        all_contracts_stocked_or_done = True
+        has_contracts = False
+
+        for item in order.items:
+            for ci in item.contract_items:
+                total_ord += ci.ordered_quantity
+                has_contracts = True
+                c_status = ci.contract.status
+                if c_status != "Выполнен": all_contracts_done = False
+                if c_status not in ["На складе", "Выполнен"]: all_contracts_stocked_or_done = False
+
+        if not has_contracts:
+            order.status = "Принят в работу"
+        elif total_ord < total_req:
+            order.status = "В процессе закупки"
+        else: # Все объемы покрыты договорами
+            if all_contracts_done: order.status = "Выполнен"
+            elif all_contracts_stocked_or_done: order.status = "На складе"
+            else: order.status = "Заказан поставщику"
+
+        db.add(order)
+    await db.commit()
+
+# --- API ЗАКАЗОВ ---
 @app.post("/api/orders", response_model=dict)
 async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends(get_db)):
     order_id = order_data.id
     if not order_id:
         dept = order_data.requesting_dept_id.strip() if order_data.requesting_dept_id else "DEP"
-        words = dept.split()
-        if not words:
-            abbr = "DEP"
-        elif len(words) == 1:
-            abbr = words[0][:3].upper()
-        else:
-            abbr = "".join([w[0] for w in words])[:3].upper()
-            
+        abbr = "".join([w[0] for w in dept.split()])[:3].upper() if len(dept.split())>1 else dept[:3].upper()
         now = datetime.utcnow()
-        mm = now.strftime("%m")
-        yyyy = now.strftime("%Y")
-        
-        result = await db.execute(select(OrderModel))
-        orders = result.scalars().all()
-        count = len(orders)
-        seq = str(count + 1).zfill(3)
-        
-        order_id = f"{abbr}-{mm}.{yyyy}.{seq}"
-        
-        collision = await db.execute(select(OrderModel).filter_by(id=order_id))
-        while collision.scalars().first():
-            count += 1
-            seq = str(count + 1).zfill(3)
-            order_id = f"{abbr}-{mm}.{yyyy}.{seq}"
-            collision = await db.execute(select(OrderModel).filter_by(id=order_id))
-    else:
-        result = await db.execute(select(OrderModel).filter_by(id=order_id))
-        if result.scalars().first():
-            raise HTTPException(status_code=400, detail="Заказ с таким ID уже существует")
+        base_id = f"{abbr}-{now.strftime('%m.%Y')}."
+        res = await db.execute(select(OrderModel))
+        count = len(res.scalars().all())
+        order_id = base_id + str(count + 1).zfill(3)
+        while (await db.execute(select(OrderModel).filter_by(id=order_id))).scalars().first():
+            count += 1; order_id = base_id + str(count + 1).zfill(3)
 
     new_order = OrderModel(
-        id=order_id,
-        enterprise=order_data.enterprise,
-        requesting_dept_id=order_data.requesting_dept_id,
-        executing_dept_id=order_data.executing_dept_id,
-        priority=order_data.priority,
-        planned_date=order_data.planned_date,
-        comment=order_data.comment,
-        status="Черновик"
+        id=order_id, enterprise=order_data.enterprise, requesting_dept_id=order_data.requesting_dept_id,
+        executing_dept_id=order_data.executing_dept_id, priority=order_data.priority, 
+        planned_date=order_data.planned_date, comment=order_data.comment, status="Черновик"
     )
-    for item in order_data.items:
-        new_order.items.append(OrderItemModel(**item.model_dump()))
+    for i in order_data.items:
+        new_order.items.append(OrderItemModel(**i.model_dump()))
     
     db.add(new_order)
     await db.commit()
-    return {"status": "success", "id": new_order.id}
+    return {"status": "success"}
 
 @app.put("/api/orders/{order_id}")
 async def edit_order(order_id: str, order_data: OrderCreateSchema, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(OrderModel).filter_by(id=order_id))
-    order = result.scalars().first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Заказ не найден")
+    res = await db.execute(select(OrderModel).filter_by(id=order_id))
+    order = res.scalars().first()
+    if not order or order.status != "Черновик": raise HTTPException(400)
     
-    if order.status != "Черновик":
-        raise HTTPException(status_code=400, detail="Редактировать можно только черновики")
-
     order.enterprise = order_data.enterprise
     order.requesting_dept_id = order_data.requesting_dept_id
     order.executing_dept_id = order_data.executing_dept_id
@@ -1003,132 +829,90 @@ async def edit_order(order_id: str, order_data: OrderCreateSchema, db: AsyncSess
     order.comment = order_data.comment
     
     await db.execute(delete(OrderItemModel).where(OrderItemModel.order_id == order_id))
-    for item in order_data.items:
-        new_item = OrderItemModel(**item.model_dump())
-        new_item.order_id = order_id
-        db.add(new_item)
-        
-    await db.commit()
-    return {"status": "success", "id": order.id}
-
-@app.patch("/api/orders/{order_id}/status")
-async def update_order_status(order_id: str, payload: OrderStatusUpdateSchema, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(OrderModel).filter_by(id=order_id))
-    order = result.scalars().first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Заказ не найден")
-    
-    if payload.status == 'Принят в работу' and order.status != 'Принят в работу':
-        order.approved_at = datetime.utcnow()
-
-    order.status = payload.status
-    if payload.reject_comment:
-        existing_comment = order.comment if order.comment else ""
-        separator = "\n\n" if existing_comment else ""
-        order.comment = f"{existing_comment}{separator}[ОТКАЗ]: {payload.reject_comment}"
-
-    # ДОБАВЛЯЕМ ДОГОВОР С ПРИВЯЗКОЙ К ПОЗИЦИИ
-    if payload.supplier_name:
-        new_contract = OrderContractModel(
-            order_id=order_id,
-            item_id=payload.item_id,      # ID позиции!
-            item_name=payload.item_name,  # Имя позиции!
-            supplier_name=payload.supplier_name,
-            contract_number=payload.contract_number,
-            contract_date=payload.contract_date,
-            currency=payload.currency,
-            incoterms=payload.incoterms,
-            ordered_quantity=payload.ordered_quantity,
-            unit_price=payload.unit_price,
-            total_amount=payload.total_amount,
-            status="Заказан"
-        )
-        db.add(new_contract)
-
-    await db.commit()
-    return {"status": "success", "new_status": order.status}
-
-@app.patch("/api/orders/{order_id}/contracts/{contract_id}/status")
-async def update_contract_status(order_id: str, contract_id: int, payload: ContractStatusUpdateSchema, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(OrderContractModel).filter_by(id=contract_id, order_id=order_id))
-    contract = result.scalars().first()
-    if not contract:
-        raise HTTPException(status_code=404, detail="Договор не найден")
-    
-    contract.status = payload.status
-    
-    # ПРОВЕРКА: Если все договоры выполнены И закуплены все нужные объемы -> закрываем весь заказ
-    result_order = await db.execute(select(OrderModel).options(selectinload(OrderModel.items), selectinload(OrderModel.contracts)).filter_by(id=order_id))
-    order = result_order.scalars().first()
-    
-    all_done = all(c.status == "Выполнен" for c in order.contracts)
-    
-    item_reqs = {i.id: i.requested_quantity for i in order.items}
-    item_ords = {i.id: 0 for i in order.items}
-    for c in order.contracts:
-        if c.item_id in item_ords:
-            item_ords[c.item_id] += c.ordered_quantity
-            
-    all_items_covered = all(item_ords[i_id] >= item_reqs[i_id] for i_id in item_reqs)
-    
-    if all_done and all_items_covered:
-        order.status = "Выполнен"
-
+    for i in order_data.items: db.add(OrderItemModel(**i.model_dump(), order_id=order_id))
     await db.commit()
     return {"status": "success"}
 
-@app.get("/api/orders", response_model=List[dict])
+@app.patch("/api/orders/{order_id}/status")
+async def update_order_status(order_id: str, payload: StatusUpdateSchema, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(OrderModel).filter_by(id=order_id))
+    order = res.scalars().first()
+    if payload.status == 'Принят в работу' and order.status != 'Принят в работу': order.approved_at = datetime.utcnow()
+    order.status = payload.status
+    if payload.reject_comment: order.comment = f"{order.comment or ''}\n\n[ОТКАЗ]: {payload.reject_comment}"
+    await db.commit()
+    return {"status": "success"}
+
+@app.get("/api/orders")
 async def get_all_orders(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(OrderModel).options(
-        selectinload(OrderModel.items),
-        selectinload(OrderModel.contracts)
-    ))
-    orders = result.scalars().all()
-    
-    response_data = []
-    for order in orders:
-        response_data.append({
-            "id": order.id,
-            "created_at": order.created_at.isoformat() if order.created_at else None,
-            "approved_at": order.approved_at.isoformat() if order.approved_at else None,
-            "status": order.status,
-            "enterprise": order.enterprise,
-            "requesting_dept_id": order.requesting_dept_id,
-            "executing_dept_id": order.executing_dept_id,
-            "priority": order.priority,
-            "planned_date": order.planned_date,
-            "comment": order.comment,
-            "contracts": [
-                {
-                    "id": c.id,
-                    "item_id": c.item_id,      # Отдаем ID
-                    "item_name": c.item_name,  # Отдаем Имя
-                    "supplier_name": c.supplier_name,
-                    "contract_number": c.contract_number,
-                    "contract_date": c.contract_date,
-                    "currency": c.currency,
-                    "incoterms": c.incoterms,
-                    "ordered_quantity": c.ordered_quantity,
-                    "unit_price": c.unit_price,
-                    "total_amount": c.total_amount,
-                    "status": c.status
-                } for c in order.contracts
-            ],
-            "items": [
-                {
-                    "id": item.id, # Обязательно отдаем ID позиции
-                    "material_code": item.material_code,
-                    "name": item.name,
-                    "unit": item.unit,
-                    "requested_quantity": item.requested_quantity,
-                    "stock_balance": item.stock_balance,
-                    "allow_analog": item.allow_analog,
-                    "manufacturer": item.manufacturer,
-                    "supplier": item.supplier,
-                    "specification": item.specification,
-                    "tech_spec_file": item.tech_spec_file,
-                    "comment": item.comment
-                } for item in order.items
-            ]
+    res = await db.execute(select(OrderModel).options(selectinload(OrderModel.items).selectinload(OrderItemModel.contract_items)))
+    orders = res.scalars().all()
+    out = []
+    for o in orders:
+        items_out = []
+        for i in o.items:
+            items_out.append({
+                "id": i.id, "material_code": i.material_code, "name": i.name, "unit": i.unit,
+                "requested_quantity": i.requested_quantity, "allow_analog": i.allow_analog,
+                "specification": i.specification, "tech_spec_file": i.tech_spec_file,
+                "contract_items": [{"ordered_quantity": ci.ordered_quantity, "contract_id": ci.contract_id} for ci in i.contract_items]
+            })
+        out.append({
+            "id": o.id, "status": o.status, "enterprise": o.enterprise, "priority": o.priority,
+            "requesting_dept_id": o.requesting_dept_id, "executing_dept_id": o.executing_dept_id,
+            "planned_date": o.planned_date, "created_at": o.created_at.isoformat(),
+            "approved_at": o.approved_at.isoformat() if o.approved_at else None, "comment": o.comment,
+            "items": items_out
         })
-    return response_data
+    return out
+
+# --- API ДОГОВОРОВ ---
+@app.post("/api/contracts")
+async def create_contract(data: ContractCreateSchema, db: AsyncSession = Depends(get_db)):
+    total = sum(i.ordered_quantity * i.unit_price for i in data.items)
+    contract = ContractModel(
+        supplier_name=data.supplier_name, contract_number=data.contract_number,
+        contract_date=data.contract_date, currency=data.currency, incoterms=data.incoterms, total_amount=total
+    )
+    affected_orders = set()
+    for i in data.items:
+        ci = ContractItemModel(**i.model_dump())
+        contract.items.append(ci)
+        
+        # Находим к какому заказу относится позиция
+        item_res = await db.execute(select(OrderItemModel).filter_by(id=i.order_item_id))
+        o_item = item_res.scalars().first()
+        if o_item: affected_orders.add(o_item.order_id)
+        
+    db.add(contract)
+    await db.commit()
+    await recalculate_orders(db, affected_orders)
+    return {"status": "success"}
+
+@app.patch("/api/contracts/{c_id}/status")
+async def update_contract_status(c_id: int, payload: ContractStatusUpdateSchema, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(ContractModel).options(selectinload(ContractModel.items).selectinload(ContractItemModel.order_item)).filter_by(id=c_id))
+    contract = res.scalars().first()
+    contract.status = payload.status
+    
+    affected_orders = set(ci.order_item.order_id for ci in contract.items if ci.order_item)
+    await db.commit()
+    await recalculate_orders(db, affected_orders)
+    return {"status": "success"}
+
+@app.get("/api/contracts")
+async def get_all_contracts(db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(ContractModel).options(selectinload(ContractModel.items).selectinload(ContractItemModel.order_item)))
+    contracts = res.scalars().all()
+    out = []
+    for c in contracts:
+        out.append({
+            "id": c.id, "contract_number": c.contract_number, "contract_date": c.contract_date,
+            "supplier_name": c.supplier_name, "currency": c.currency, "incoterms": c.incoterms,
+            "status": c.status, "total_amount": c.total_amount,
+            "items": [{
+                "order_item_id": ci.order_item_id, "ordered_quantity": ci.ordered_quantity, "unit_price": ci.unit_price,
+                "order_item": {"name": ci.order_item.name, "order_id": ci.order_item.order_id} if ci.order_item else None
+            } for ci in c.items]
+        })
+    return out
