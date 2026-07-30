@@ -89,7 +89,7 @@ class OrderItemBase(BaseModel):
     comment: Optional[str] = None
 
 class OrderCreateSchema(BaseModel):
-    id: Optional[str] = ""  # ID теперь опциональный, бэкенд сгенерирует его сам
+    id: Optional[str] = ""  
     enterprise: Optional[str] = None  
     requesting_dept_id: str
     executing_dept_id: str
@@ -183,11 +183,11 @@ HTML_CONTENT = """
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Заказывающий отдел</label>
-                        <input type="text" id="reqDept" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Производство">
+                        <input type="text" id="reqDept" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Например: IT">
                     </div>
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Исполняющий отдел</label>
-                        <input type="text" id="execDept" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Отдел закупок">
+                        <input type="text" id="execDept" required class="w-full border border-gray-300 rounded-lg p-2 text-sm" placeholder="Например: Закупок">
                     </div>
                 </div>
                 <div class="grid grid-cols-2 gap-3">
@@ -319,6 +319,9 @@ HTML_CONTENT = """
             document.getElementById('submitBtn').innerText = 'Создать заказ';
             orderForm.reset();
             
+            // Жесткий сброс поля "Предприятие"
+            document.getElementById('enterprise').value = '';
+            
             itemsContainer.innerHTML = '';
             addItemRow();
             
@@ -395,7 +398,7 @@ HTML_CONTENT = """
             }
 
             const orderData = {
-                id: editingOrderId ? editingOrderId : "", // Передаем пустую строку для нового заказа
+                id: editingOrderId ? editingOrderId : "", 
                 enterprise: document.getElementById('enterprise').value,
                 requesting_dept_id: document.getElementById('reqDept').value,
                 executing_dept_id: document.getElementById('execDept').value,
@@ -618,7 +621,7 @@ HTML_CONTENT = """
                                         <h3 class="font-bold text-gray-900">Заказ #${order.id || '?'}</h3>
                                         <span class="text-xs font-semibold px-2 py-0.5 rounded ${priorityColor}">Приоритет: ${order.priority || 'Средний'}</span>
                                     </div>
-                                    <p class="text-xs text-gray-500 mt-1">🏭 ${order.enterprise || 'Завод'} | ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
+                                    <p class="text-xs text-gray-500 mt-1">🏭 ${order.enterprise || 'Не указано'} | ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
                                 </div>
                                 <span class="text-xs font-bold px-2.5 py-1 rounded-full ${statusColor}">${order.status}</span>
                             </div>
@@ -706,7 +709,7 @@ HTML_CONTENT = """
                         <div><b>Дата создания:</b><br>${createdStr}</div>
                         <div><b>Дата утверждения:</b><br>${approvedStr}</div>
                     </div>
-                    <p><b>Предприятие:</b> ${order.enterprise || '-'}</p>
+                    <p><b>Предприятие:</b> ${order.enterprise || 'Не указано'}</p>
                     <p><b>Направление:</b> ${order.requesting_dept_id} ➔ ${order.executing_dept_id}</p>
                     <p><b>Приоритет:</b> ${order.priority}</p>
                     <p><b>Необходимая дата:</b> <span class="text-red-600 font-bold">${order.planned_date || 'Не указана'}</span></p>
@@ -770,7 +773,6 @@ async def web_app():
 async def create_order(order_data: OrderCreateSchema, db: AsyncSession = Depends(get_db)):
     order_id = order_data.id
     if not order_id:
-        # Автогенерация ID по правилу: АББР-ММ.ГГГГ.НОМЕР
         dept = order_data.requesting_dept_id.strip() if order_data.requesting_dept_id else "DEP"
         words = dept.split()
         if not words:
