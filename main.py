@@ -165,8 +165,9 @@ HTML_CONTENT = """
                 <div class="grid grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">Предприятие</label>
-                        <select id="enterprise" required class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-white">
-                            <option value="" disabled selected>Выберите предприятие...</option>
+                        <!-- Убрали required, теперь можно сохранить пустым -->
+                        <select id="enterprise" class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-white">
+                            <option value="" selected>Выберите предприятие...</option>
                             <option value="Завод №1 (Баку)">Завод №1 (Баку)</option>
                             <option value="Завод №2 (Гянджа)">Завод №2 (Гянджа)</option>
                         </select>
@@ -319,7 +320,6 @@ HTML_CONTENT = """
             document.getElementById('submitBtn').innerText = 'Создать заказ';
             orderForm.reset();
             
-            // Жесткий сброс поля "Предприятие"
             document.getElementById('enterprise').value = '';
             
             itemsContainer.innerHTML = '';
